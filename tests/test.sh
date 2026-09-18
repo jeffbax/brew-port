@@ -120,6 +120,19 @@ output="$("$utility" map explain brew git --map "$local_map")"
 contains 'skip' "$output"
 contains 'local override' "$output"
 
+duplicate_map="$tmp_dir/duplicate-map.json"
+cat >"$duplicate_map" <<'EOF'
+{"version":1,"mappings":[
+ {"kind":"brew","token":"duplicate-tool","action":"port","target":"wrong-port","note":"first map entry"},
+ {"kind":"brew","token":"duplicate-tool","action":"skip","note":"last map entry"}
+]}
+EOF
+"$utility" map validate --map "$duplicate_map" >/dev/null
+output="$("$utility" map explain brew duplicate-tool --map "$duplicate_map")"
+contains 'duplicate-tool: skip' "$output"
+contains 'last map entry' "$output"
+not_contains 'first map entry' "$output"
+
 root_brewfile="$tmp_dir/root.Brewfile"
 printf '%s\n' 'brew "git"' 'brew "root-tool"' >"$root_brewfile"
 : >"$sudo_log"

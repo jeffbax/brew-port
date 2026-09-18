@@ -49,7 +49,7 @@ bp_lookup_mapping() {
 	index=$((${#BP_MAP_FILES[@]} - 1))
 	while [ "$index" -ge 0 ]; do
 		map_file="${BP_MAP_FILES[$index]}"
-		result="$("$BP_JQ_BIN" -r --arg kind "$kind" --arg token "$token" '.mappings[] | select(.kind == $kind and .token == $token) | [.action, (.target // ""), (.note // ""), (.architectures // [] | @json)] | join("\u001c")' "$map_file")"
+		result="$("$BP_JQ_BIN" -r --arg kind "$kind" --arg token "$token" '[.mappings[] | select(.kind == $kind and .token == $token)] | last | select(. != null) | [.action, (.target // ""), (.note // ""), (.architectures // [] | @json)] | join("\u001c")' "$map_file")"
 		if [ -n "$result" ]; then
 			printf '%s\034%s\n' "$result" "$map_file"
 			return 0
