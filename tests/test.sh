@@ -5,6 +5,7 @@ repo_dir="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 utility="$repo_dir/bin/macports-brewfile"
 updater="$repo_dir/bin/macports-update"
 release_installer="$repo_dir/fallbacks/install-release-binary.sh"
+mas_fallback="$repo_dir/fallbacks/install-mas.sh"
 rtk_fallback="$repo_dir/fallbacks/install-rtk.sh"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/macports-brewfile-test.XXXXXX")"
 
@@ -37,9 +38,9 @@ assert_map_is_valid() {
     /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
     NF != 5 { exit 1 }
     $1 !~ /^(brew|cask)$/ || $2 == "" { exit 1 }
-    $3 !~ /^(port|fallback|skip)$/ { exit 1 }
+    $3 !~ /^(port|fallback|fallback-root|skip)$/ { exit 1 }
     $3 == "port" && ($4 == "" || $4 == "-") { exit 1 }
-    $3 == "fallback" && ($4 !~ /^fallbacks\/[A-Za-z0-9._\/-]+\.sh$/ || $4 ~ /(^|\/)\.\.?($|\/)/) { exit 1 }
+    $3 ~ /^fallback(-root)?$/ && ($4 !~ /^fallbacks\/[A-Za-z0-9._\/-]+\.sh$/ || $4 ~ /(^|\/)\.\.?($|\/)/) { exit 1 }
     $3 == "skip" && $4 != "-" { exit 1 }
     seen[$1 SUBSEP $2]++ { exit 1 }
   ' "$repo_dir/maps/default.tsv" || fail 'The default map is invalid.'
@@ -49,6 +50,7 @@ for file in \
   "$utility" \
   "$updater" \
   "$release_installer" \
+  "$mas_fallback" \
   "$repo_dir/fallbacks/install-rtk.sh" \
   "$repo_dir/fallbacks/install-worktrunk.sh"; do
   sh -n "$file"
@@ -62,6 +64,7 @@ assert_map_is_valid
 brewfile="$tmp_dir/Brewfile"
 printf '%s\n' \
   'brew "git"' \
+  'brew "mas"' \
   'brew "rtk"' \
   'brew "signal-cli"' \
   'cask "1password-cli"' \
@@ -71,6 +74,8 @@ printf '%s\n' \
 output="$("$utility" install --dry-run "$brewfile")"
 assert_contains 'Would run: sudo /opt/local/bin/port selfupdate' "$output"
 assert_contains 'Would install MacPorts port git (for git)' "$output"
+assert_contains 'Would run reviewed fallback for mas' "$output"
+assert_not_contains 'Would install MacPorts port mas (for mas)' "$output"
 assert_contains 'Would run reviewed fallback for rtk' "$output"
 assert_contains 'signal-cli: No verified MacPorts port or reviewed fallback is available.' "$output"
 assert_contains 'Would install MacPorts port 1password-cli (for 1password-cli)' "$output"
@@ -144,6 +149,7 @@ EOF
 chmod +x "$mock_port" "$mock_sudo"
 
 mock_curl="$tmp_dir/curl"
+mock_installer="$tmp_dir/installer"
 curl_log="$tmp_dir/curl.log"
 release_dir="$tmp_dir/releases"
 mkdir -p "$release_dir"
@@ -181,12 +187,25 @@ printf '%s\n' "$url" >>"$MOCK_CURL_LOG"
 case "$url" in
 *'/repos/rtk-ai/rtk/releases/latest') cp "$MOCK_RTK_RELEASE" "$output_file" ;;
 *'/repos/max-sixty/worktrunk/releases/latest') cp "$MOCK_WORKTRUNK_RELEASE" "$output_file" ;;
+*'/repos/mas-cli/mas/releases/latest') cp "${MOCK_MAS_RELEASE:?}" "$output_file" ;;
 *'/rtk/'*) cp "$MOCK_RTK_ARCHIVE" "$output_file" ;;
 *'/worktrunk/'*) cp "$MOCK_WORKTRUNK_ARCHIVE" "$output_file" ;;
+*'/mas/'*) cp "${MOCK_MAS_PACKAGE:?}" "$output_file" ;;
 *) exit 2 ;;
 esac
 EOF
 chmod +x "$mock_curl"
+
+cat >"$mock_installer" <<'EOF'
+#!/bin/sh
+set -eu
+
+: "${MOCK_MAS_BINARY:?}"
+: "${MOCK_MAS_DESTINATION:?}"
+mkdir -p "$(dirname "$MOCK_MAS_DESTINATION")"
+install -m 755 "$MOCK_MAS_BINARY" "$MOCK_MAS_DESTINATION"
+EOF
+chmod +x "$mock_installer"
 
 make_release_archive() {
   tool_name="$1"
@@ -220,14 +239,26 @@ write_release_json() {
 rtk_v1_archive="$release_dir/rtk-v0.49.0.tar.gz"
 rtk_v2_archive="$release_dir/rtk-v0.50.0.tar.gz"
 worktrunk_archive="$release_dir/worktrunk-v0.78.0.tar.xz"
+mas_package="$release_dir/mas-v7.0.0.pkg"
+mas_binary="$release_dir/mas"
 make_release_archive rtk rtk 0.49.0 "$rtk_v1_archive"
 make_release_archive rtk rtk 0.50.0 "$rtk_v2_archive"
 make_release_archive worktrunk wt 0.78.0 "$worktrunk_archive"
+printf 'verified test package\n' >"$mas_package"
+printf '%s\n' \
+  '#!/bin/sh' \
+  "case \"\${1:-}\" in" \
+  "version) printf '%s\\n' '7.0.0' ;;" \
+  "*) printf '%s\\n' 'mas 7.0.0' ;;" \
+  'esac' >"$mas_binary"
+chmod +x "$mas_binary"
 
 rtk_release_json="$release_dir/rtk-release.json"
 worktrunk_release_json="$release_dir/worktrunk-release.json"
+mas_release_json="$release_dir/mas-release.json"
 write_release_json v0.49.0 rtk-x86_64-apple-darwin.tar.gz https://example.invalid/rtk/v0.49.0 "$rtk_v1_archive" "$rtk_release_json"
 write_release_json v0.78.0 worktrunk-x86_64-apple-darwin.tar.xz https://example.invalid/worktrunk/v0.78.0 "$worktrunk_archive" "$worktrunk_release_json"
+write_release_json v7.0.0 mas-7.0.0-x86_64.pkg https://example.invalid/mas/v7.0.0 "$mas_package" "$mas_release_json"
 
 : >"$sudo_log"
 output="$(SUDO_LOG="$sudo_log" \
@@ -342,8 +373,35 @@ fi
 assert_contains 'Could not determine the latest verified rtk release.' "$output"
 
 write_release_json v0.50.0 rtk-x86_64-apple-darwin.tar.gz https://example.invalid/rtk/v0.50.0 "$rtk_v2_archive" "$rtk_release_json"
+existing_mas_home="$tmp_dir/existing-mas-home"
+existing_mas_state="$tmp_dir/existing-mas-state"
+existing_mas_destination="$existing_mas_home/mas"
+mkdir -p "$existing_mas_home"
+install -m 755 "$mas_binary" "$existing_mas_destination"
+: >"$sudo_log"
+output="$(HOME="$existing_mas_home" \
+  XDG_STATE_HOME="$existing_mas_state" \
+  SUDO_LOG="$sudo_log" \
+  MOCK_CURL_LOG="$curl_log" \
+  MOCK_RTK_RELEASE="$rtk_release_json" \
+  MOCK_WORKTRUNK_RELEASE="$worktrunk_release_json" \
+  MOCK_MAS_RELEASE="$mas_release_json" \
+  MOCK_RTK_ARCHIVE="$rtk_v2_archive" \
+  MOCK_WORKTRUNK_ARCHIVE="$worktrunk_archive" \
+  MOCK_MAS_PACKAGE="$mas_package" \
+  MOCK_MAS_BINARY="$mas_binary" \
+  MOCK_MAS_DESTINATION="$existing_mas_destination" \
+  MACPORTS_BREWFILE_CURL_BIN="$mock_curl" \
+  MACPORTS_BREWFILE_SUDO_BIN="$mock_sudo" \
+  MACPORTS_BREWFILE_INSTALLER_BIN="$mock_installer" \
+  MACPORTS_BREWFILE_MAS_DESTINATION="$existing_mas_destination" \
+  "$mas_fallback")"
+assert_contains "mas release v7.0.0 is already available at $existing_mas_destination." "$output"
+[ ! -s "$sudo_log" ] || fail 'A matching existing MAS binary must not run the package installer.'
+
 update_home="$tmp_dir/update-home"
 update_state="$tmp_dir/update-state"
+update_mas_destination="$update_home/mas"
 mkdir -p "$update_home"
 : >"$sudo_log"
 : >"$curl_log"
@@ -353,17 +411,26 @@ output="$(HOME="$update_home" \
   MOCK_CURL_LOG="$curl_log" \
   MOCK_RTK_RELEASE="$rtk_release_json" \
   MOCK_WORKTRUNK_RELEASE="$worktrunk_release_json" \
+  MOCK_MAS_RELEASE="$mas_release_json" \
   MOCK_RTK_ARCHIVE="$rtk_v2_archive" \
   MOCK_WORKTRUNK_ARCHIVE="$worktrunk_archive" \
+  MOCK_MAS_PACKAGE="$mas_package" \
+  MOCK_MAS_BINARY="$mas_binary" \
+  MOCK_MAS_DESTINATION="$update_mas_destination" \
   MACPORTS_BREWFILE_PORT_BIN="$mock_port" \
   MACPORTS_BREWFILE_SUDO_BIN="$mock_sudo" \
   MACPORTS_BREWFILE_CURL_BIN="$mock_curl" \
+  MACPORTS_BREWFILE_INSTALLER_BIN="$mock_installer" \
+  MACPORTS_BREWFILE_MAS_DESTINATION="$update_mas_destination" \
   "$updater")"
 assert_contains 'Installed rtk release v0.50.0.' "$output"
 assert_contains 'Installed worktrunk release v0.78.0.' "$output"
+assert_contains 'Installed mas release v7.0.0.' "$output"
+[ -x "$update_mas_destination" ] || fail 'Expected the MAS package fallback to install its executable.'
 [ "$(grep -Fxc -- '-v' "$sudo_log")" -eq 1 ] || fail 'Expected one sudo authorization for the updater.'
 [ "$(grep -Fxc -- "-n $mock_port selfupdate" "$sudo_log")" -eq 1 ] || fail 'Expected updater selfupdate to use non-interactive sudo.'
 [ "$(grep -Fxc -- "-n $mock_port upgrade outdated" "$sudo_log")" -eq 1 ] || fail 'Expected updater to upgrade all outdated ports.'
+[ "$(grep -Fxc -- "-n $mock_port install mas" "$sudo_log" || true)" -eq 0 ] || fail 'MAS must use its explicit fallback instead of the MacPorts port.'
 
 : >"$sudo_log"
 : >"$curl_log"

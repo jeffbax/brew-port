@@ -1,24 +1,37 @@
 #!/bin/sh
 set -eu
 
-[ "$#" -eq 4 ] || {
+[ "$#" -eq 4 ] || [ "$#" -eq 5 ] || {
   printf '%s\n' 'Usage: install-release-binary.sh FALLBACK-ID REPOSITORY ASSET-NAME BINARY-NAME' >&2
+  printf '%s\n' '       install-release-binary.sh FALLBACK-ID REPOSITORY ASSET-NAME package DESTINATION' >&2
   exit 1
 }
 
 fallback_id="$1"
 repository="$2"
-asset_name="$3"
-binary_name="$4"
+asset_name_template="$3"
+if [ "$#" -eq 4 ]; then
+  delivery=binary
+  binary_name="$4"
+  destination="$HOME/.local/bin/$binary_name"
+else
+  delivery="$4"
+  destination="$5"
+  [ "$delivery" = package ] || {
+    printf '%s\n' "Unknown release delivery type: $delivery" >&2
+    exit 1
+  }
+  binary_name="$(basename "$destination")"
+fi
 state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
 state_dir="$state_root/macports-brewfile"
 state_file="$state_dir/fallbacks.tsv"
-install_dir="$HOME/.local/bin"
-destination="$install_dir/$binary_name"
 curl_bin="${MACPORTS_BREWFILE_CURL_BIN:-curl}"
 plutil_bin="${MACPORTS_BREWFILE_PLUTIL_BIN:-/usr/bin/plutil}"
 shasum_bin="${MACPORTS_BREWFILE_SHASUM_BIN:-shasum}"
 tar_bin="${MACPORTS_BREWFILE_TAR_BIN:-tar}"
+sudo_bin="${MACPORTS_BREWFILE_SUDO_BIN:-sudo}"
+installer_bin="${MACPORTS_BREWFILE_INSTALLER_BIN:-/usr/sbin/installer}"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/macports-brewfile-release.XXXXXX")"
 staging_file=
 state_tmp=
@@ -70,6 +83,8 @@ fetch_latest_release() {
 
   release_tag="$("$plutil_bin" -extract tag_name raw "$release_json")" || return 1
   [ -n "$release_tag" ] || return 1
+  release_version="${release_tag#v}"
+  asset_name="$(printf '%s\n' "$asset_name_template" | sed "s/{version}/$release_version/g")"
   asset_count="$("$plutil_bin" -extract assets raw "$release_json")" || return 1
   case "$asset_count" in
   '' | *[!0-9]*) return 1 ;;
@@ -130,9 +145,15 @@ if [ "$state_tag" = "$release_tag" ] && [ -n "$state_tag" ]; then
   fi
 fi
 
+if [ "$delivery" = package ] && [ -x "$destination" ]; then
+  existing_version="$("$destination" version 2>/dev/null || true)"
+  if [ "$existing_version" = "$release_version" ] || [ "$existing_version" = "$release_tag" ]; then
+    log "$fallback_id release $release_tag is already available at $destination."
+    exit 0
+  fi
+fi
+
 archive="$tmp_dir/$asset_name"
-extract_dir="$tmp_dir/extract"
-mkdir -p "$extract_dir"
 log "Installing latest $fallback_id release $release_tag..."
 "$curl_bin" --fail --location --proto '=https' --tlsv1.2 --silent --show-error --output "$archive" "$asset_url"
 
@@ -141,20 +162,35 @@ if [ "$(sha256_file "$archive")" != "$asset_sha256" ]; then
   exit 1
 fi
 
-"$tar_bin" -xf "$archive" -C "$extract_dir"
-source_binary="$(find "$extract_dir" -type f -name "$binary_name" -perm -111 -print | sed -n '1p')"
-if [ -z "$source_binary" ]; then
-  printf '%s\n' "Release archive for $fallback_id did not contain executable $binary_name." >&2
-  exit 1
-fi
+case "$delivery" in
+binary)
+  extract_dir="$tmp_dir/extract"
+  mkdir -p "$extract_dir"
+  "$tar_bin" -xf "$archive" -C "$extract_dir"
+  source_binary="$(find "$extract_dir" -type f -name "$binary_name" -perm -111 -print | sed -n '1p')"
+  if [ -z "$source_binary" ]; then
+    printf '%s\n' "Release archive for $fallback_id did not contain executable $binary_name." >&2
+    exit 1
+  fi
 
-umask 077
-mkdir -p "$install_dir"
-staging_file="$install_dir/.${binary_name}.macports-brewfile.$$"
-install -m 755 "$source_binary" "$staging_file"
-binary_sha256="$(sha256_file "$staging_file")"
-mv -f "$staging_file" "$destination"
-staging_file=
+  install_dir="$(dirname "$destination")"
+  umask 077
+  mkdir -p "$install_dir"
+  staging_file="$install_dir/.${binary_name}.macports-brewfile.$$"
+  install -m 755 "$source_binary" "$staging_file"
+  binary_sha256="$(sha256_file "$staging_file")"
+  mv -f "$staging_file" "$destination"
+  staging_file=
+  ;;
+package)
+  "$sudo_bin" -n "$installer_bin" -pkg "$archive" -target /
+  if [ ! -x "$destination" ]; then
+    printf '%s\n' "Package for $fallback_id did not install executable $destination." >&2
+    exit 1
+  fi
+  binary_sha256="$(sha256_file "$destination")"
+  ;;
+esac
 
 mkdir -p "$state_dir"
 chmod 700 "$state_dir"

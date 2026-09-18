@@ -11,6 +11,8 @@ It treats Brewfiles as declarations, not as instructions to run Homebrew:
   fallbacks;
 - fallback tools install verified upstream Intel macOS release binaries into
   `~/.local/bin`;
+- a mapping can explicitly override an otherwise-valid MacPorts port with a
+  manual fallback when that port is broken;
 - mapped casks can install MacPorts CLI ports, while other casks are reported
   for manual installation;
 - `mas` declarations are installed when the Mac App Store is signed in.
@@ -69,9 +71,14 @@ warning; a missing fallback is reported as unresolved.
 declaration-kind  homebrew-token  action  target  note
 ```
 
-`action` is `port`, `fallback`, or `skip`. Fallback targets are scripts below
-`fallbacks/`; they install verified upstream release binaries into
+`action` is `port`, `fallback`, `fallback-root`, or `skip`. Fallback targets
+are scripts below `fallbacks/`; they install verified upstream release binaries into
 `~/.local/bin`.
+
+Use `fallback-root` for a reviewed fallback that needs the active sudo lease,
+such as the official MAS installer package. It overrides the normal same-named
+MacPorts lookup and does not produce an extra password prompt during an
+`install` or `macports-update` run.
 Individual package failures and intentional skips are reported at the end so
 the remaining declarations can continue.
 
