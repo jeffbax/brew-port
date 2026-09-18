@@ -32,6 +32,8 @@ bp_find_port() {
 bp_find_jq() {
 	if [ -n "${BREW_PORT_JQ_BIN:-}" ]; then
 		BP_JQ_BIN="$BREW_PORT_JQ_BIN"
+	elif [ -n "${BP_PORT_BIN:-}" ] && [ -x "$(dirname -- "$BP_PORT_BIN")/jq" ]; then
+		BP_JQ_BIN="$(dirname -- "$BP_PORT_BIN")/jq"
 	elif [ -x /opt/local/bin/jq ]; then
 		BP_JQ_BIN=/opt/local/bin/jq
 	elif [ -x /usr/bin/jq ]; then

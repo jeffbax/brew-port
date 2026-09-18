@@ -23,6 +23,7 @@ mock_uname="$tmp_dir/uname"
 mock_port="$tmp_dir/port"
 mock_sudo="$tmp_dir/sudo"
 sudo_log="$tmp_dir/sudo.log"
+jq_log="$tmp_dir/jq.log"
 cat >"$mock_uname" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in -s) echo Darwin ;; -m) echo "${MOCK_ARCH:?}" ;; *) exit 2 ;; esac
@@ -38,6 +39,16 @@ case "$1" in -v) exit 0 ;; -n) shift; exec "$@" ;; *) exit 2 ;; esac
 EOF
 chmod +x "$mock_uname" "$mock_port" "$mock_sudo"
 
+custom_port_bin="$tmp_dir/custom-macports/bin"
+mkdir -p "$custom_port_bin"
+ln -s "$mock_port" "$custom_port_bin/port"
+cat >"$custom_port_bin/jq" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${MOCK_JQ_LOG:?}"
+exec /usr/bin/jq "$@"
+EOF
+chmod +x "$custom_port_bin/jq"
+
 for file in "$utility" "$repo_dir"/bin/lib/brew-port/*.bash "$repo_dir"/maps/fallbacks/*.sh; do bash -n "$file"; done
 command -v "$shfmt_bin" >/dev/null || fail 'shfmt is required to run the checks.'
 "$shfmt_bin" -ln bash -d "$utility" "$repo_dir"/bin/lib/brew-port/*.bash "$repo_dir"/maps/fallbacks/*.sh "$repo_dir"/completions/brew-port.bash "$0"
@@ -45,6 +56,11 @@ command -v "$shfmt_bin" >/dev/null || fail 'shfmt is required to run the checks.
 [ ! -e "$repo_dir/bin/macports-brewfile" ] || fail 'The old CLI must not remain.'
 [ -f "$repo_dir/.agents/skills/brew-port/SKILL.md" ] || fail 'Missing agent skill.'
 "$utility" map validate | grep -Fq 'Mappings are valid.'
+prefix_brewfile="$tmp_dir/custom-prefix.Brewfile"
+printf '%s\n' 'brew "git"' >"$prefix_brewfile"
+: >"$jq_log"
+MOCK_ARCH=arm64 MOCK_JQ_LOG="$jq_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$custom_port_bin/port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$prefix_brewfile" >/dev/null
+[ -s "$jq_log" ] || fail 'The selected MacPorts prefix jq was not used.'
 linked_bin="$tmp_dir/linked-bin"
 mkdir -p "$linked_bin"
 ln -s "$utility" "$linked_bin/brew-port"
