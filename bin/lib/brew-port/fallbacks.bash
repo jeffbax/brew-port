@@ -166,9 +166,15 @@ bp_run_brewfile() {
 		mas) mas_apps+=("$BP_DECLARATION_TOKEN") ;;
 		esac
 	done <"$brewfile"
-	for token in "${brews[@]}"; do bp_run_mapping brew "$token"; done
-	for token in "${casks[@]}"; do bp_run_cask "$token"; done
-	for token in "${mas_apps[@]}"; do bp_run_mas "$token"; done
+	if [ "${#brews[@]}" -gt 0 ]; then
+		for token in "${brews[@]}"; do bp_run_mapping brew "$token"; done
+	fi
+	if [ "${#casks[@]}" -gt 0 ]; then
+		for token in "${casks[@]}"; do bp_run_cask "$token"; done
+	fi
+	if [ "${#mas_apps[@]}" -gt 0 ]; then
+		for token in "${mas_apps[@]}"; do bp_run_mas "$token"; done
+	fi
 }
 
 bp_refresh_fallbacks() {
