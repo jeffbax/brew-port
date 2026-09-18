@@ -83,7 +83,7 @@ bp_strip_ruby_comment() {
 		if [ -n "$quote" ]; then
 			if "$escaped"; then
 				escaped=false
-			elif [ "$character" = '\\' ]; then
+			elif [ "$character" = "\\" ]; then
 				escaped=true
 			elif [ "$character" = "$quote" ]; then
 				quote=
