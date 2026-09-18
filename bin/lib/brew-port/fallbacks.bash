@@ -36,26 +36,67 @@ EOF
 	esac
 }
 
-bp_extract_brew() { sed -nE "s/^[[:space:]]*brew[[:space:]]*\\(?[[:space:]]*[\"']([^\"']+)[\"'].*/\\1/p" "$1"; }
-bp_extract_cask() { sed -nE "s/^[[:space:]]*cask[[:space:]]*\\(?[[:space:]]*[\"']([^\"']+)[\"'].*/\\1/p" "$1"; }
-bp_extract_mas() { sed -nE "s/^[[:space:]]*mas[[:space:]]*\\(?[[:space:]]*[\"'][^\"']+[\"'],[[:space:]]*id:[[:space:]]*([0-9]+).*/\\1/p" "$1"; }
+bp_parse_brewfile_declaration() {
+	local line="$1" brew_or_cask_pattern mas_pattern
+	BP_DECLARATION_KIND=
+	BP_DECLARATION_TOKEN=
+	BP_DECLARATION_TRAILING=
+	brew_or_cask_pattern="^[[:space:]]*(brew|cask)[[:space:]]*(\\([[:space:]]*)?[\"']([^\"']+)[\"'][[:space:]]*\\)?(.*)$"
+	mas_pattern="^[[:space:]]*mas[[:space:]]*(\\([[:space:]]*)?[\"'][^\"']+[\"'],[[:space:]]*id:[[:space:]]*([0-9]+)[[:space:]]*\\)?(.*)$"
+	if [[ "$line" =~ $brew_or_cask_pattern ]]; then
+		BP_DECLARATION_KIND="${BASH_REMATCH[1]}"
+		BP_DECLARATION_TOKEN="${BASH_REMATCH[3]}"
+		BP_DECLARATION_TRAILING="${BASH_REMATCH[4]}"
+	elif [[ "$line" =~ $mas_pattern ]]; then
+		BP_DECLARATION_KIND=mas
+		BP_DECLARATION_TOKEN="${BASH_REMATCH[3]}"
+		BP_DECLARATION_TRAILING="${BASH_REMATCH[4]}"
+	else
+		return 1
+	fi
+}
+
+bp_declaration_is_conditional() {
+	[[ "$1" =~ ^(if|unless)([[:space:]]|\() || "$1" =~ [[:space:]](if|unless)([[:space:]]|\() ]]
+}
+
+bp_run_cask() {
+	local token="$1" action
+	action="$(bp_lookup_mapping cask "$token" | cut -d $'\034' -f1 || true)"
+	if [ -n "$action" ]; then bp_run_mapping cask "$token"; else bp_gui "Install cask $token manually in $HOME/Applications."; fi
+}
+
+bp_run_mas() {
+	local token="$1"
+	if "$BP_DRY_RUN"; then
+		bp_log "Would install Mac App Store app $token"
+	elif ! command -v mas >/dev/null 2>&1 || ! mas account >/dev/null 2>&1; then
+		bp_gui "Mac App Store install $token requires a signed-in mas client."
+	elif ! mas install "$token"; then bp_gui "Mac App Store install failed for id $token."; fi
+}
 
 bp_run_brewfile() {
-	local brewfile="$1" token action
-	while IFS= read -r token; do [ -n "$token" ] && bp_run_mapping brew "$token"; done < <(bp_extract_brew "$brewfile")
-	while IFS= read -r token; do
-		[ -n "$token" ] || continue
-		action="$(bp_lookup_mapping cask "$token" | cut -d $'\034' -f1 || true)"
-		if [ -n "$action" ]; then bp_run_mapping cask "$token"; else bp_gui "Install cask $token manually in $HOME/Applications."; fi
-	done < <(bp_extract_cask "$brewfile")
-	while IFS= read -r token; do
-		[ -n "$token" ] || continue
-		if "$BP_DRY_RUN"; then
-			bp_log "Would install Mac App Store app $token"
-		elif ! command -v mas >/dev/null 2>&1 || ! mas account >/dev/null 2>&1; then
-			bp_gui "Mac App Store install $token requires a signed-in mas client."
-		elif ! mas install "$token"; then bp_gui "Mac App Store install failed for id $token."; fi
-	done < <(bp_extract_mas "$brewfile")
+	local brewfile="$1" line conditional_depth=0
+	while IFS= read -r line || [ -n "$line" ]; do
+		if [[ "$line" =~ ^[[:space:]]*end([[:space:]]|$) ]]; then
+			[ "$conditional_depth" -gt 0 ] && conditional_depth=$((conditional_depth - 1))
+			continue
+		fi
+		if [[ "$line" =~ ^[[:space:]]*(if|unless|case)([[:space:]]|\() ]]; then
+			conditional_depth=$((conditional_depth + 1))
+			continue
+		fi
+		bp_parse_brewfile_declaration "$line" || continue
+		if [ "$conditional_depth" -gt 0 ] || bp_declaration_is_conditional "$BP_DECLARATION_TRAILING"; then
+			bp_unresolved "$BP_DECLARATION_KIND $BP_DECLARATION_TOKEN" 'Conditional Brewfile declaration is unsupported.'
+			continue
+		fi
+		case "$BP_DECLARATION_KIND" in
+		brew) bp_run_mapping brew "$BP_DECLARATION_TOKEN" ;;
+		cask) bp_run_cask "$BP_DECLARATION_TOKEN" ;;
+		mas) bp_run_mas "$BP_DECLARATION_TOKEN" ;;
+		esac
+	done <"$brewfile"
 }
 
 bp_refresh_fallbacks() {

@@ -114,6 +114,14 @@ contains 'Would install MacPorts port skhd (for asmvik/formulae/skhd)' "$output"
 contains 'Would install MacPorts port 1password-cli (for 1password-cli)' "$output"
 contains 'Install cask firefox manually' "$output"
 
+conditional_brewfile="$tmp_dir/conditional.Brewfile"
+printf '%s\n' 'brew "signal-cli" if Hardware::CPU.intel?' 'if Hardware::CPU.intel?' '  brew "rtk"' 'end' >"$conditional_brewfile"
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$conditional_brewfile")"
+contains 'brew signal-cli: Conditional Brewfile declaration is unsupported.' "$output"
+contains 'brew rtk: Conditional Brewfile declaration is unsupported.' "$output"
+not_contains 'Would run reviewed fallback for signal-cli' "$output"
+not_contains 'Would run reviewed fallback for rtk' "$output"
+
 bad_map="$tmp_dir/bad.json"
 printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"bad","action":"fallback","target":"../escape.sh","architectures":["arm64"]}]}' >"$bad_map"
 if output="$("$utility" map validate --map "$bad_map" 2>&1)"; then fail 'Invalid map passed validation.'; fi
