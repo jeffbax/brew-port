@@ -6,6 +6,11 @@ utility="$repo_dir/bin/brew-port"
 shfmt_bin="${SHFMT_BIN:-shfmt}"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/brew-port-test.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+export HOME="$tmp_dir/home"
+export XDG_CONFIG_HOME="$tmp_dir/config"
+export XDG_DATA_HOME="$tmp_dir/data"
+export XDG_STATE_HOME="$tmp_dir/state"
+mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
 
 fail() {
 	printf '%s\n' "$*" >&2
@@ -40,10 +45,9 @@ command -v "$shfmt_bin" >/dev/null || fail 'shfmt is required to run the checks.
 [ ! -e "$repo_dir/bin/macports-brewfile" ] || fail 'The old CLI must not remain.'
 [ -f "$repo_dir/.agents/skills/brew-port/SKILL.md" ] || fail 'Missing agent skill.'
 "$utility" map validate | grep -Fq 'Mappings are valid.'
-init_home="$tmp_dir/init-home"
-HOME="$init_home" "$utility" map init >/dev/null
-[ -f "$init_home/.config/brew-port/mappings.json" ] || fail 'map init did not create an override file.'
-HOME="$init_home" "$utility" map validate >/dev/null
+"$utility" map init >/dev/null
+[ -f "$XDG_CONFIG_HOME/brew-port/mappings.json" ] || fail 'map init did not create an override file.'
+"$utility" map validate >/dev/null
 
 brewfile="$tmp_dir/Brewfile"
 printf '%s\n' \
@@ -106,13 +110,11 @@ contains 'git: local override' "$output"
 [ "$(grep -Fxc -- "-n $mock_port selfupdate" "$sudo_log")" -eq 1 ] || fail 'Selfupdate did not reuse sudo.'
 [ "$(grep -Fxc -- '-n /usr/bin/true' "$sudo_log")" -eq 1 ] || fail 'fallback-root did not reuse sudo.'
 
-state_home="$tmp_dir/state-home"
-mkdir -p "$state_home"
 : >"$sudo_log"
-output="$(MOCK_ARCH=arm64 HOME="$state_home" SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" update --dry-run --map "$local_map")"
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" update --dry-run --map "$local_map")"
 contains "Would run: sudo $mock_port upgrade outdated" "$output"
 [ ! -s "$sudo_log" ] || fail 'Dry-run update used sudo.'
-[ ! -e "$state_home/.local/state/brew-port" ] || fail 'Dry-run update wrote fallback state.'
+[ ! -e "$XDG_STATE_HOME/brew-port" ] || fail 'Dry-run update wrote fallback state.'
 
 release_dir="$tmp_dir/release"
 mkdir -p "$release_dir/bin"
@@ -175,9 +177,8 @@ contains '/native/openjdk25' "$("$signal_home/.local/bin/signal-cli")"
 if output="$(BREW_PORT_JQ_BIN=/not/a/jq "$utility" map validate 2>&1)"; then fail 'map validate unexpectedly worked without jq.'; fi
 contains 'jq is required' "$output"
 
-completion_home="$tmp_dir/completion-home"
-HOME="$completion_home" "$utility" completion install fish >/dev/null
-[ -f "$completion_home/.config/fish/completions/brew-port.fish" ] || fail 'Fish completion was not installed.'
+"$utility" completion install fish >/dev/null
+[ -f "$XDG_CONFIG_HOME/fish/completions/brew-port.fish" ] || fail 'Fish completion was not installed.'
 "$utility" completion bash | grep -Fq 'complete -F _brew_port brew-port'
 
 shellcheck -s bash -x -P "$repo_dir/bin" "$utility" "$repo_dir"/maps/fallbacks/*.sh
