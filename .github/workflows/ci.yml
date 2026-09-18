@@ -1,5 +1,6 @@
 name: Checks
 on:
+  workflow_dispatch:
   push:
     branches: ['**']
   pull_request:
@@ -7,6 +8,7 @@ permissions:
   contents: read
 jobs:
   checks:
+    timeout-minutes: 45
     name: Checks (${{ matrix.runner }}, ${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -40,3 +42,7 @@ jobs:
         run: |
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/test.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release.sh
+      - name: Real Brewfile installation
+        run: /bin/bash tests/integration.sh
+        env:
+          BREW_PORT_PORT_BIN: ${{ steps.macports.outputs.prefix }}/bin/port

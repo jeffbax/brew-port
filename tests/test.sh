@@ -71,9 +71,9 @@ exec /usr/bin/jq "$@"
 EOF
 chmod +x "$custom_port_bin/jq"
 
-for file in "$utility" "$repo_dir"/bin/lib/brew-port/*.bash "$repo_dir"/maps/fallbacks/*.sh; do bash -n "$file"; done
+for file in "$utility" "$repo_dir"/bin/lib/brew-port/*.bash "$repo_dir"/maps/fallbacks/*.sh "$repo_dir/tests/integration.sh"; do bash -n "$file"; done
 command -v "$shfmt_bin" >/dev/null || fail 'shfmt is required to run the checks.'
-"$shfmt_bin" -ln bash -d "$utility" "$repo_dir"/bin/lib/brew-port/*.bash "$repo_dir"/maps/fallbacks/*.sh "$repo_dir"/completions/brew-port.bash "$0"
+"$shfmt_bin" -ln bash -d "$utility" "$repo_dir"/bin/lib/brew-port/*.bash "$repo_dir"/maps/fallbacks/*.sh "$repo_dir"/completions/brew-port.bash "$repo_dir/tests/integration.sh" "$0"
 [ -x "$utility" ] || fail 'brew-port must be executable.'
 [ ! -e "$repo_dir/bin/macports-brewfile" ] || fail 'The old CLI must not remain.'
 [ -f "$repo_dir/.agents/skills/brew-port/SKILL.md" ] || fail 'Missing agent skill.'
@@ -351,6 +351,6 @@ contains 'jq is required' "$output"
 [ -f "$XDG_CONFIG_HOME/fish/completions/brew-port.fish" ] || fail 'Fish completion was not installed.'
 "$utility" completion bash | grep -Fq 'complete -F _brew_port brew-port'
 
-shellcheck -s bash -x -P "$repo_dir/bin" "$utility" "$repo_dir"/maps/fallbacks/*.sh
+shellcheck -s bash -x -P "$repo_dir/bin" "$utility" "$repo_dir"/maps/fallbacks/*.sh "$repo_dir/tests/integration.sh"
 git diff --check
 printf '%s\n' 'brew-port checks passed.'

@@ -77,11 +77,14 @@ Install `shfmt` (for example, `sudo port install shfmt`), then run:
 ```sh
 shfmt -ln bash -w bin/brew-port bin/lib/brew-port/*.bash maps/fallbacks/*.sh completions/brew-port.bash tests/test.sh
 shfmt -ln bash -w install.sh scripts/*.sh tests/release.sh
+shfmt -ln bash -w tests/integration.sh
 tests/test.sh
 bash tests/release.sh
 ```
 
 The test suite enforces `shfmt -d`, Bash syntax checks, and ShellCheck.
+
+CI also runs `tests/integration.sh` on disposable macOS 15/26 Intel and ARM64 runners with real MacPorts. It installs the packaged CLI, translates `tests/fixtures/smoke.Brewfile`, installs `tree` and the native `rtk` fallback, and checks repeat installation and fallback refresh. This test installs real system packages and requires noninteractive sudo; run it on a disposable machine. The Checks workflow can also be started manually without cutting a release.
 
 ## Releases
 
