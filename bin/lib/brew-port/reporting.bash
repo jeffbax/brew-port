@@ -1,10 +1,15 @@
 bp_report_init() {
 	BP_UNRESOLVED="$BP_TMP_DIR/unresolved"
 	BP_GUI="$BP_TMP_DIR/gui"
+	BP_ACTION_FAILED=false
 	: >"$BP_UNRESOLVED"
 	: >"$BP_GUI"
 }
 bp_unresolved() { printf '%s\t%s\n' "$1" "$2" >>"$BP_UNRESOLVED"; }
+bp_action_failed() {
+	BP_ACTION_FAILED=true
+	bp_unresolved "$1" "$2"
+}
 bp_gui() { printf '%s\n' "$1" >>"$BP_GUI"; }
 bp_report() {
 	if [ -s "$BP_UNRESOLVED" ]; then
@@ -15,4 +20,5 @@ bp_report() {
 		bp_log 'GUI follow-up:'
 		cat "$BP_GUI"
 	fi
+	[ "$BP_ACTION_FAILED" = false ]
 }

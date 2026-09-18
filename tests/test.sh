@@ -33,7 +33,12 @@ case "$1" in -s) echo Darwin ;; -m) echo "${MOCK_ARCH:?}" ;; *) exit 2 ;; esac
 EOF
 cat >"$mock_port" <<'EOF'
 #!/usr/bin/env bash
-case "$1" in version) exit 0 ;; selfupdate|install|upgrade) echo "port $*" ;; *) exit 2 ;; esac
+case "$1" in
+version) exit 0 ;;
+install) echo "port $*"; [ "${MOCK_PORT_FAIL_TARGET:-}" != "$2" ] ;;
+selfupdate|upgrade) echo "port $*" ;;
+*) exit 2 ;;
+esac
 EOF
 cat >"$mock_sudo" <<'EOF'
 #!/usr/bin/env bash
@@ -148,7 +153,9 @@ cat >"$local_map" <<'EOF'
  {"kind":"brew","token":"git","action":"skip","note":"local override"},
  {"kind":"brew","token":"root-tool","action":"fallback-root","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"local trusted test fallback"},
  {"kind":"brew","token":"multiline-tool","action":"fallback","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"First line\nSecond line"},
- {"kind":"brew","token":"escaped-tool","action":"fallback","target":"fallbacks/escaped-tool.sh","architectures":["arm64"],"note":"must remain in this map"}
+ {"kind":"brew","token":"escaped-tool","action":"fallback","target":"fallbacks/escaped-tool.sh","architectures":["arm64"],"note":"must remain in this map"},
+ {"kind":"brew","token":"failing-port","action":"port","target":"fails-to-install","note":"test a port failure"},
+ {"kind":"brew","token":"failing-fallback","action":"fallback","target":"fallbacks/failing-fallback.sh","architectures":["arm64"],"note":"test a fallback failure"}
 ]}
 EOF
 cat >"$map_dir/fallbacks/root-tool.sh" <<'EOF'
@@ -156,6 +163,8 @@ cat >"$map_dir/fallbacks/root-tool.sh" <<'EOF'
 "$BREW_PORT_SUDO_BIN" -n /usr/bin/true
 EOF
 chmod +x "$map_dir/fallbacks/root-tool.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$map_dir/fallbacks/failing-fallback.sh"
+chmod +x "$map_dir/fallbacks/failing-fallback.sh"
 outside_fallback="$tmp_dir/outside-fallback.sh"
 printf '%s\n' '#!/usr/bin/env bash' >"$outside_fallback"
 chmod +x "$outside_fallback"
@@ -190,6 +199,12 @@ printf '%s\n' 'brew "escaped-tool"' >"$escaped_brewfile"
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run --map "$local_map" "$escaped_brewfile")"
 contains 'Fallback target escapes the map fallbacks directory: fallbacks/escaped-tool.sh' "$output"
 not_contains 'Would run reviewed fallback for escaped-tool' "$output"
+
+failing_brewfile="$tmp_dir/failing.Brewfile"
+printf '%s\n' 'brew "failing-port"' 'brew "failing-fallback"' >"$failing_brewfile"
+if output="$(MOCK_ARCH=arm64 MOCK_PORT_FAIL_TARGET=fails-to-install SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --map "$local_map" "$failing_brewfile" 2>&1)"; then fail 'Failed package actions unexpectedly returned success.'; fi
+contains 'failing-port: MacPorts install failed: fails-to-install' "$output"
+contains 'failing-fallback: Fallback failed: test a fallback failure' "$output"
 
 root_brewfile="$tmp_dir/root.Brewfile"
 printf '%s\n' 'brew "git"' 'brew "root-tool"' >"$root_brewfile"

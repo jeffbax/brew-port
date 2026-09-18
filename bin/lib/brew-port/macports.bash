@@ -50,5 +50,5 @@ bp_install_port() {
 	fi
 	bp_start_sudo
 	bp_log "Installing MacPorts port $target (for $token)"
-	bp_port install "$target" || bp_unresolved "$token" "MacPorts install failed: $target"
+	bp_port install "$target" || bp_action_failed "$token" "MacPorts install failed: $target"
 }

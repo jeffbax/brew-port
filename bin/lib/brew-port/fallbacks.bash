@@ -31,7 +31,7 @@ EOF
 		fi
 		[ "$action" = fallback-root ] && bp_start_sudo
 		bp_log "Running reviewed fallback for $token: $note"
-		BREW_PORT_ARCH="$BP_ARCH" BREW_PORT_PORT_BIN="$BP_PORT_BIN" BREW_PORT_SUDO_BIN="$BP_SUDO_BIN" BREW_PORT_JQ_BIN="$BP_JQ_BIN" bash "$fallback_path" || bp_unresolved "$token" "Fallback failed: $note"
+		BREW_PORT_ARCH="$BP_ARCH" BREW_PORT_PORT_BIN="$BP_PORT_BIN" BREW_PORT_SUDO_BIN="$BP_SUDO_BIN" BREW_PORT_JQ_BIN="$BP_JQ_BIN" bash "$fallback_path" || bp_action_failed "$token" "Fallback failed: $note"
 		;;
 	esac
 }
