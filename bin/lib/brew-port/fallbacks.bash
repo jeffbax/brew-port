@@ -73,6 +73,29 @@ bp_fallback_inventory_entries() {
 	[ -f "$BP_MANAGED_FALLBACKS" ] && awk -F '\t' 'NF { print "brew\t" $1 }' "$BP_MANAGED_FALLBACKS"
 }
 
+bp_strip_ruby_comment() {
+	local text="$1" result= quote= escaped=false character index
+	for ((index = 0; index < ${#text}; index++)); do
+		character="${text:index:1}"
+		if [ -n "$quote" ]; then
+			if "$escaped"; then
+				escaped=false
+			elif [ "$character" = '\\' ]; then
+				escaped=true
+			elif [ "$character" = "$quote" ]; then
+				quote=
+			fi
+		else
+			case "$character" in
+			"'" | '"') quote="$character" ;;
+			'#') break ;;
+			esac
+		fi
+		result+="$character"
+	done
+	printf '%s' "$result"
+}
+
 bp_parse_brewfile_declaration() {
 	local line="$1" brew_or_cask_pattern mas_pattern
 	BP_DECLARATION_KIND=
@@ -83,11 +106,11 @@ bp_parse_brewfile_declaration() {
 	if [[ "$line" =~ $brew_or_cask_pattern ]]; then
 		BP_DECLARATION_KIND="${BASH_REMATCH[1]}"
 		BP_DECLARATION_TOKEN="${BASH_REMATCH[3]}"
-		BP_DECLARATION_TRAILING="${BASH_REMATCH[4]}"
+		BP_DECLARATION_TRAILING="$(bp_strip_ruby_comment "${BASH_REMATCH[4]}")"
 	elif [[ "$line" =~ $mas_pattern ]]; then
 		BP_DECLARATION_KIND=mas
 		BP_DECLARATION_TOKEN="${BASH_REMATCH[2]}"
-		BP_DECLARATION_TRAILING="${BASH_REMATCH[3]}"
+		BP_DECLARATION_TRAILING="$(bp_strip_ruby_comment "${BASH_REMATCH[3]}")"
 	else
 		return 1
 	fi
