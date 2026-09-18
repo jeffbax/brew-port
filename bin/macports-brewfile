@@ -1,0 +1,289 @@
+#!/bin/sh
+set -eu
+
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+repo_dir="$(CDPATH='' cd -- "$script_dir/.." && pwd)"
+map_file="$repo_dir/maps/default.tsv"
+port_bin=/opt/local/bin/port
+dry_run=false
+state_dir=
+unresolved_file=
+gui_file=
+
+log() {
+  printf '%s\n' "$*"
+}
+
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: macports-brewfile install [--dry-run] BREWFILE...
+
+Install Brewfile CLI declarations through MacPorts and report GUI follow-up.
+EOF
+}
+
+cleanup() {
+  if [ -n "$state_dir" ]; then
+    rm -rf "$state_dir"
+  fi
+}
+
+record_unresolved() {
+  printf '%s\t%s\n' "$1" "$2" >>"$unresolved_file"
+}
+
+record_gui() {
+  printf '%s\n' "$1" >>"$gui_file"
+}
+
+extract_brew_items() {
+  sed -nE 's/^[[:space:]]*brew[[:space:]]+"([^"]+)".*/\1/p' "$1"
+}
+
+extract_cask_items() {
+  sed -nE 's/^[[:space:]]*cask[[:space:]]+"([^"]+)".*/\1/p' "$1"
+}
+
+extract_mas_ids() {
+  sed -nE 's/^[[:space:]]*mas[[:space:]]+"[^"]+",[[:space:]]*id:[[:space:]]*([0-9]+).*/\1/p' "$1"
+}
+
+validate_map() {
+  [ -f "$map_file" ] || die "Mapping file is missing: $map_file"
+
+  if ! awk -F '\t' '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    NF != 5 { exit 1 }
+    $1 !~ /^(brew|cask)$/ || $2 == "" { exit 1 }
+    $3 !~ /^(port|fallback|skip)$/ { exit 1 }
+    $3 == "port" && ($4 == "" || $4 == "-") { exit 1 }
+    $3 == "fallback" && ($4 !~ /^fallbacks\/[A-Za-z0-9._\/-]+\.sh$/ || $4 ~ /(^|\/)\.\.?($|\/)/) { exit 1 }
+    $3 == "skip" && $4 != "-" { exit 1 }
+    seen[$1 SUBSEP $2]++ { exit 1 }
+  ' "$map_file"; then
+    die "Invalid mapping file: $map_file"
+  fi
+}
+
+map_field() {
+  kind="$1"
+  token="$2"
+  field="$3"
+
+  awk -F '\t' -v kind="$kind" -v token="$token" -v field="$field" '
+    $1 == kind && $2 == token {
+      print $field
+      exit
+    }
+  ' "$map_file"
+}
+
+install_macports_target() {
+  source_token="$1"
+  target="$2"
+
+  if "$dry_run"; then
+    log "Would install MacPorts port $target (for $source_token)"
+    return 0
+  fi
+
+  log "Installing MacPorts port $target (for $source_token)"
+  if ! sudo "$port_bin" install "$target"; then
+    record_unresolved "$source_token" "MacPorts install failed: $target"
+  fi
+}
+
+run_macports_item() {
+  kind="$1"
+  token="$2"
+  action="$(map_field "$kind" "$token" 3)"
+  target="$(map_field "$kind" "$token" 4)"
+  note="$(map_field "$kind" "$token" 5)"
+
+  if [ -z "$action" ]; then
+    if [ "$kind" = brew ]; then
+      install_macports_target "$token" "$token"
+    fi
+    return 0
+  fi
+
+  case "$action" in
+  port)
+    install_macports_target "$token" "$target"
+    ;;
+  fallback)
+    fallback_path="$repo_dir/$target"
+    if [ ! -f "$fallback_path" ]; then
+      record_unresolved "$token" "Missing MacPorts fallback: $target"
+      return 0
+    fi
+
+    if "$dry_run"; then
+      log "Would run reviewed fallback for $token: $note"
+      return 0
+    fi
+
+    log "Running reviewed fallback for $token: $note"
+    if ! MACPORTS_BREWFILE_PORT_BIN="$port_bin" sh "$fallback_path"; then
+      record_unresolved "$token" "Fallback failed: $note"
+    fi
+    ;;
+  skip)
+    record_unresolved "$token" "$note"
+    ;;
+  esac
+}
+
+run_macports_brewfile() {
+  extract_brew_items "$1" | while IFS= read -r token; do
+    if [ -n "$token" ]; then
+      run_macports_item brew "$token"
+    fi
+  done
+}
+
+run_macports_cask_mappings() {
+  extract_cask_items "$1" | while IFS= read -r token; do
+    action="$(map_field cask "$token" 3)"
+    if [ -n "$action" ]; then
+      run_macports_item cask "$token"
+    fi
+  done
+}
+
+run_mas_installs() {
+  brewfile="$1"
+
+  if "$dry_run"; then
+    extract_mas_ids "$brewfile" | while IFS= read -r app_id; do
+      log "Would install Mac App Store app $app_id"
+    done
+    return 0
+  fi
+
+  if ! command -v mas >/dev/null 2>&1; then
+    record_gui "Mac App Store installs skipped because mas is unavailable."
+    return 0
+  fi
+
+  if ! mas account >/dev/null 2>&1; then
+    record_gui "Mac App Store installs skipped; sign in to the App Store, then rerun macports-brewfile."
+    return 0
+  fi
+
+  extract_mas_ids "$brewfile" | while IFS= read -r app_id; do
+    if ! mas install "$app_id"; then
+      record_gui "Mac App Store install failed for id $app_id."
+    fi
+  done
+}
+
+report_manual_casks() {
+  brewfile="$1"
+
+  while IFS= read -r line; do
+    token="$(printf '%s\n' "$line" | sed -nE 's/^[[:space:]]*cask[[:space:]]+"([^"]+)".*/\1/p')"
+    [ -n "$token" ] || continue
+
+    action="$(map_field cask "$token" 3)"
+    if [ "$action" = port ] || [ "$action" = fallback ]; then
+      log "MacPorts handles cask $token."
+      continue
+    fi
+
+    destination="$HOME/Applications"
+    case "$line" in
+    *'appdir: "/Applications"'*) destination=/Applications ;;
+    esac
+    record_gui "Install cask $token manually in $destination."
+  done <"$brewfile"
+}
+
+run_brewfile() {
+  brewfile="$1"
+  run_macports_brewfile "$brewfile"
+  run_macports_cask_mappings "$brewfile"
+  run_mas_installs "$brewfile"
+  report_manual_casks "$brewfile"
+}
+
+print_summary() {
+  if [ -s "$unresolved_file" ]; then
+    log "Unresolved packages:"
+    sed 's/\t/: /' "$unresolved_file"
+  fi
+
+  if [ -s "$gui_file" ]; then
+    log "GUI follow-up:"
+    cat "$gui_file"
+  fi
+}
+
+[ "$#" -gt 0 ] || {
+  usage >&2
+  exit 1
+}
+
+command_name="$1"
+shift
+[ "$command_name" = install ] || {
+  usage >&2
+  exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  --dry-run)
+    dry_run=true
+    shift
+    ;;
+  --help | -h)
+    usage
+    exit 0
+    ;;
+  --*)
+    die "Unknown option: $1"
+    ;;
+  *)
+    break
+    ;;
+  esac
+done
+
+[ "$#" -gt 0 ] || die "At least one Brewfile is required."
+
+for brewfile in "$@"; do
+  [ -f "$brewfile" ] || die "Brewfile does not exist: $brewfile"
+done
+
+validate_map
+
+if [ ! -x "$port_bin" ]; then
+  if "$dry_run"; then
+    log "MacPorts would be required at $port_bin."
+  else
+    die "MacPorts is required at $port_bin. Install it from https://www.macports.org/install.php."
+  fi
+fi
+
+state_dir="$(mktemp -d "${TMPDIR:-/tmp}/macports-brewfile.XXXXXX")"
+unresolved_file="$state_dir/unresolved"
+gui_file="$state_dir/gui"
+trap cleanup 0 HUP INT TERM
+
+if "$dry_run"; then
+  log "Would run: sudo $port_bin selfupdate"
+else
+  sudo "$port_bin" selfupdate
+fi
+
+for brewfile in "$@"; do
+  run_brewfile "$brewfile"
+done
+
+print_summary
