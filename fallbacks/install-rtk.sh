@@ -5,6 +5,7 @@ version=0.49.0
 archive_url="https://github.com/rtk-ai/rtk/archive/refs/tags/v${version}.tar.gz"
 archive_sha256=74b226ab00b8698d5084402893c76d93189493bd332b99d0b1e681d1ef860eb8
 port_bin="${MACPORTS_BREWFILE_PORT_BIN:-/opt/local/bin/port}"
+sudo_bin="${MACPORTS_BREWFILE_SUDO_BIN:-sudo}"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rtk.XXXXXX")"
 
 cleanup() {
@@ -13,7 +14,7 @@ cleanup() {
 trap cleanup 0 HUP INT TERM
 
 if ! command -v cargo >/dev/null 2>&1; then
-  sudo "$port_bin" install cargo
+  "$sudo_bin" -n "$port_bin" install cargo
 fi
 
 archive="$tmp_dir/rtk.tar.gz"

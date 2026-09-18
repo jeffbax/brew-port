@@ -5,6 +5,7 @@ version=0.77.0
 archive_url="https://github.com/max-sixty/worktrunk/archive/refs/tags/v${version}.tar.gz"
 archive_sha256=8160f0afe8287f3aad52e6ea1de7b0cfed01ad6d3d60ecdb952db6836775eda2
 port_bin="${MACPORTS_BREWFILE_PORT_BIN:-/opt/local/bin/port}"
+sudo_bin="${MACPORTS_BREWFILE_SUDO_BIN:-sudo}"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/worktrunk.XXXXXX")"
 
 cleanup() {
@@ -13,7 +14,7 @@ cleanup() {
 trap cleanup 0 HUP INT TERM
 
 if ! command -v cargo >/dev/null 2>&1; then
-  sudo "$port_bin" install cargo
+  "$sudo_bin" -n "$port_bin" install cargo
 fi
 
 archive="$tmp_dir/worktrunk.tar.gz"

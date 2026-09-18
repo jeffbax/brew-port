@@ -4,11 +4,17 @@ set -eu
 script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 repo_dir="$(CDPATH='' cd -- "$script_dir/.." && pwd)"
 map_file="$repo_dir/maps/default.tsv"
-port_bin=/opt/local/bin/port
+port_bin="${MACPORTS_BREWFILE_PORT_BIN:-/opt/local/bin/port}"
+sudo_bin="${MACPORTS_BREWFILE_SUDO_BIN:-sudo}"
 dry_run=false
 state_dir=
 unresolved_file=
 gui_file=
+install_output_file=
+command_status_file=
+notes_file=
+sudo_refresh_pid=
+sudo_refresh_sleep_file=
 
 log() {
   printf '%s\n' "$*"
@@ -28,6 +34,18 @@ EOF
 }
 
 cleanup() {
+  if [ -n "$sudo_refresh_sleep_file" ] && [ -s "$sudo_refresh_sleep_file" ]; then
+    IFS= read -r sudo_refresh_sleep_pid <"$sudo_refresh_sleep_file" || true
+    if [ -n "${sudo_refresh_sleep_pid:-}" ]; then
+      kill "$sudo_refresh_sleep_pid" 2>/dev/null || true
+    fi
+  fi
+
+  if [ -n "$sudo_refresh_pid" ]; then
+    kill "$sudo_refresh_pid" 2>/dev/null || true
+    wait "$sudo_refresh_pid" 2>/dev/null || true
+  fi
+
   if [ -n "$state_dir" ]; then
     rm -rf "$state_dir"
   fi
@@ -83,6 +101,47 @@ map_field() {
   ' "$map_file"
 }
 
+capture_command() {
+  label="$1"
+  shift
+
+  printf '\n===== %s =====\n' "$label" >>"$install_output_file"
+  : >"$command_status_file"
+
+  (
+    set +e
+    "$@"
+    status=$?
+    printf '%s\n' "$status" >"$command_status_file"
+    exit 0
+  ) 2>&1 | tee -a "$install_output_file"
+
+  status="$(cat "$command_status_file")"
+  [ "$status" -eq 0 ]
+}
+
+run_privileged_port() {
+  capture_command "$sudo_bin -n $port_bin $*" "$sudo_bin" -n "$port_bin" "$@"
+}
+
+keep_sudo_alive() {
+  while :; do
+    sleep 60 &
+    sudo_refresh_sleep_pid=$!
+    printf '%s\n' "$sudo_refresh_sleep_pid" >"$sudo_refresh_sleep_file"
+    wait "$sudo_refresh_sleep_pid" || exit 0
+    : >"$sudo_refresh_sleep_file"
+    "$sudo_bin" -n -v || exit 0
+  done
+}
+
+start_sudo_session() {
+  log "Requesting administrator access for MacPorts..."
+  "$sudo_bin" -v
+  keep_sudo_alive &
+  sudo_refresh_pid=$!
+}
+
 install_macports_target() {
   source_token="$1"
   target="$2"
@@ -93,7 +152,7 @@ install_macports_target() {
   fi
 
   log "Installing MacPorts port $target (for $source_token)"
-  if ! sudo "$port_bin" install "$target"; then
+  if ! run_privileged_port install "$target"; then
     record_unresolved "$source_token" "MacPorts install failed: $target"
   fi
 }
@@ -129,7 +188,10 @@ run_macports_item() {
     fi
 
     log "Running reviewed fallback for $token: $note"
-    if ! MACPORTS_BREWFILE_PORT_BIN="$port_bin" sh "$fallback_path"; then
+    if ! capture_command "fallback $token" \
+      env MACPORTS_BREWFILE_PORT_BIN="$port_bin" \
+      MACPORTS_BREWFILE_SUDO_BIN="$sudo_bin" \
+      sh "$fallback_path"; then
       record_unresolved "$token" "Fallback failed: $note"
     fi
     ;;
@@ -224,6 +286,29 @@ print_summary() {
   fi
 }
 
+print_install_notes() {
+  awk '
+    /^===== / { label = $0; in_notes = 0; next }
+    /^[[:space:]]*--->  Some of the ports you installed have notes:/ {
+      in_notes = 1
+      printed_label = 0
+      next
+    }
+    in_notes {
+      if (!printed_label) {
+        print label
+        printed_label = 1
+      }
+      print
+    }
+  ' "$install_output_file" >"$notes_file"
+
+  if [ -s "$notes_file" ]; then
+    log "MacPorts installation notes:"
+    cat "$notes_file"
+  fi
+}
+
 [ "$#" -gt 0 ] || {
   usage >&2
   exit 1
@@ -274,12 +359,19 @@ fi
 state_dir="$(mktemp -d "${TMPDIR:-/tmp}/macports-brewfile.XXXXXX")"
 unresolved_file="$state_dir/unresolved"
 gui_file="$state_dir/gui"
+install_output_file="$state_dir/install-output"
+command_status_file="$state_dir/command-status"
+notes_file="$state_dir/notes"
+sudo_refresh_sleep_file="$state_dir/sudo-refresh-sleep"
 trap cleanup 0 HUP INT TERM
 
 if "$dry_run"; then
   log "Would run: sudo $port_bin selfupdate"
 else
-  sudo "$port_bin" selfupdate
+  start_sudo_session
+  if ! run_privileged_port selfupdate; then
+    die "MacPorts selfupdate failed. Resolve the error above, then rerun macports-brewfile."
+  fi
 fi
 
 for brewfile in "$@"; do
@@ -287,3 +379,6 @@ for brewfile in "$@"; do
 done
 
 print_summary
+if ! "$dry_run"; then
+  print_install_notes
+fi
