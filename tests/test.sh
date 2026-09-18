@@ -141,7 +141,7 @@ contains 'Would install MacPorts port git (for git)' "$output"
 not_contains 'Conditional Brewfile declaration is unsupported.' "$output"
 
 mas_brewfile="$tmp_dir/mas.Brewfile"
-printf '%s\n' 'mas "Example App", id: 12345' >"$mas_brewfile"
+printf '%s\n' 'mas "Tom'"'"'s App", id: 12345' >"$mas_brewfile"
 : >"$mas_log"
 PATH="$tmp_dir:$PATH" MAS_LOG="$mas_log" MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$mas_brewfile" >/dev/null
 grep -Fqx 'install 12345' "$mas_log" || fail 'MAS installation was gated on the obsolete account subcommand.'

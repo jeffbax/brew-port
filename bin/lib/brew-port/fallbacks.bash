@@ -100,20 +100,25 @@ bp_strip_ruby_comment() {
 }
 
 bp_parse_brewfile_declaration() {
-	local line="$1" brew_or_cask_pattern mas_pattern
+	local line="$1" brew_or_cask_pattern mas_double_pattern mas_single_pattern
 	BP_DECLARATION_KIND=
 	BP_DECLARATION_TOKEN=
 	BP_DECLARATION_TRAILING=
 	brew_or_cask_pattern="^[[:space:]]*(brew|cask)[[:space:]]*(\\([[:space:]]*)?[\"']([^\"']+)[\"'][[:space:]]*\\)?(.*)$"
-	mas_pattern="^[[:space:]]*mas[[:space:]]*(\\([[:space:]]*)?[\"'][^\"']+[\"'],[[:space:]]*id:[[:space:]]*([0-9]+)[[:space:]]*\\)?(.*)$"
+	mas_double_pattern='^[[:space:]]*mas[[:space:]]*(\([[:space:]]*)?"([^"]+)",[[:space:]]*id:[[:space:]]*([0-9]+)[[:space:]]*\)?(.*)$'
+	mas_single_pattern="^[[:space:]]*mas[[:space:]]*(\\([[:space:]]*)?'([^']+)',[[:space:]]*id:[[:space:]]*([0-9]+)[[:space:]]*\\)?(.*)$"
 	if [[ "$line" =~ $brew_or_cask_pattern ]]; then
 		BP_DECLARATION_KIND="${BASH_REMATCH[1]}"
 		BP_DECLARATION_TOKEN="${BASH_REMATCH[3]}"
 		BP_DECLARATION_TRAILING="$(bp_strip_ruby_comment "${BASH_REMATCH[4]}")"
-	elif [[ "$line" =~ $mas_pattern ]]; then
+	elif [[ "$line" =~ $mas_double_pattern ]]; then
 		BP_DECLARATION_KIND=mas
-		BP_DECLARATION_TOKEN="${BASH_REMATCH[2]}"
-		BP_DECLARATION_TRAILING="$(bp_strip_ruby_comment "${BASH_REMATCH[3]}")"
+		BP_DECLARATION_TOKEN="${BASH_REMATCH[3]}"
+		BP_DECLARATION_TRAILING="$(bp_strip_ruby_comment "${BASH_REMATCH[4]}")"
+	elif [[ "$line" =~ $mas_single_pattern ]]; then
+		BP_DECLARATION_KIND=mas
+		BP_DECLARATION_TOKEN="${BASH_REMATCH[3]}"
+		BP_DECLARATION_TRAILING="$(bp_strip_ruby_comment "${BASH_REMATCH[4]}")"
 	else
 		return 1
 	fi
