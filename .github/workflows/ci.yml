@@ -23,14 +23,20 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+      - uses: melusina-org/setup-macports@v1.1.6
+        id: macports
+        with:
+          parameters: .github/parameters/setup-macports.yaml
+          cache: disable
+      - name: Expose MacPorts binaries
+        run: echo "${{ steps.macports.outputs.prefix }}/bin" >> "$GITHUB_PATH"
       - name: Verify native architecture
         run: test "$(uname -m)" = "$EXPECTED_ARCH"
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
-      - run: brew install shfmt shellcheck jq bash
       - name: System Bash 3.2
         run: /bin/bash tests/test.sh && /bin/bash tests/release.sh
       - name: Current Bash
         run: |
-          "$(brew --prefix)/bin/bash" tests/test.sh
-          "$(brew --prefix)/bin/bash" tests/release.sh
+          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/test.sh
+          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release.sh

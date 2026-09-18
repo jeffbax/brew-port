@@ -1,0 +1,7 @@
+version: '2.11.5'
+prefix: /opt/local
+ports:
+  - name: bash
+  - name: jq
+  - name: shellcheck
+  - name: shfmt
