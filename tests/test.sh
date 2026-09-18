@@ -23,8 +23,10 @@ mock_uname="$tmp_dir/uname"
 mock_port="$tmp_dir/port"
 mock_sudo="$tmp_dir/sudo"
 mock_sysctl="$tmp_dir/sysctl"
+mock_mas="$tmp_dir/mas"
 sudo_log="$tmp_dir/sudo.log"
 jq_log="$tmp_dir/jq.log"
+mas_log="$tmp_dir/mas.log"
 cat >"$mock_uname" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in -s) echo Darwin ;; -m) echo "${MOCK_ARCH:?}" ;; *) exit 2 ;; esac
@@ -44,6 +46,11 @@ cat >"$mock_sysctl" <<'EOF'
 case "$1 $2" in '-in sysctl.proc_translated') echo "${MOCK_TRANSLATED:-0}" ;; *) exit 2 ;; esac
 EOF
 chmod +x "$mock_sysctl"
+cat >"$mock_mas" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in install) printf '%s\n' "$*" >>"${MAS_LOG:?}" ;; *) exit 2 ;; esac
+EOF
+chmod +x "$mock_mas"
 
 custom_port_bin="$tmp_dir/custom-macports/bin"
 mkdir -p "$custom_port_bin"
@@ -121,6 +128,12 @@ contains 'brew signal-cli: Conditional Brewfile declaration is unsupported.' "$o
 contains 'brew rtk: Conditional Brewfile declaration is unsupported.' "$output"
 not_contains 'Would run reviewed fallback for signal-cli' "$output"
 not_contains 'Would run reviewed fallback for rtk' "$output"
+
+mas_brewfile="$tmp_dir/mas.Brewfile"
+printf '%s\n' 'mas "Example App", id: 12345' >"$mas_brewfile"
+: >"$mas_log"
+PATH="$tmp_dir:$PATH" MAS_LOG="$mas_log" MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$mas_brewfile" >/dev/null
+grep -Fqx 'install 12345' "$mas_log" || fail 'MAS installation was gated on the obsolete account subcommand.'
 
 bad_map="$tmp_dir/bad.json"
 printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"bad","action":"fallback","target":"../escape.sh","architectures":["arm64"]}]}' >"$bad_map"

@@ -49,8 +49,8 @@ bp_parse_brewfile_declaration() {
 		BP_DECLARATION_TRAILING="${BASH_REMATCH[4]}"
 	elif [[ "$line" =~ $mas_pattern ]]; then
 		BP_DECLARATION_KIND=mas
-		BP_DECLARATION_TOKEN="${BASH_REMATCH[3]}"
-		BP_DECLARATION_TRAILING="${BASH_REMATCH[4]}"
+		BP_DECLARATION_TOKEN="${BASH_REMATCH[2]}"
+		BP_DECLARATION_TRAILING="${BASH_REMATCH[3]}"
 	else
 		return 1
 	fi
@@ -70,8 +70,8 @@ bp_run_mas() {
 	local token="$1"
 	if "$BP_DRY_RUN"; then
 		bp_log "Would install Mac App Store app $token"
-	elif ! command -v mas >/dev/null 2>&1 || ! mas account >/dev/null 2>&1; then
-		bp_gui "Mac App Store install $token requires a signed-in mas client."
+	elif ! command -v mas >/dev/null 2>&1; then
+		bp_gui "Mac App Store install $token requires an installed mas client."
 	elif ! mas install "$token"; then bp_gui "Mac App Store install failed for id $token."; fi
 }
 
