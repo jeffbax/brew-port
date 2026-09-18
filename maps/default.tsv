@@ -3,13 +3,13 @@
 # Fields are tab-separated:
 #   declaration-kind  Homebrew-token  action  target  note
 #
-# `port` installs target with MacPorts. `fallback` runs a reviewed script below
-# fallbacks. `skip` records an unresolved package without stopping the
-# remainder of the installation. Unlisted `brew` formulae default to a
+# `port` installs target with MacPorts. `fallback` runs a reviewed release
+# installer below `fallbacks/`. `skip` records an unresolved package without
+# stopping the remainder of the installation. Unlisted `brew` formulae default to a
 # same-named MacPorts port; unlisted casks remain manual installs.
 
 brew	asmvik/formulae/skhd	port	skhd	MacPorts ships skhd without the Homebrew tap namespace.
-brew	rtk	fallback	fallbacks/install-rtk.sh	No MacPorts port; build the pinned upstream source locally.
+brew	rtk	fallback	fallbacks/install-rtk.sh	No MacPorts port; install the latest verified upstream Intel macOS release locally.
 brew	signal-cli	skip	-	No verified MacPorts port or reviewed fallback is available.
-brew	worktrunk	fallback	fallbacks/install-worktrunk.sh	MacPorts' wt port is a different C++ Web Toolkit.
+brew	worktrunk	fallback	fallbacks/install-worktrunk.sh	MacPorts' wt port is a different C++ Web Toolkit; install the latest verified upstream Intel macOS release locally.
 cask	1password-cli	port	1password-cli	MacPorts packages the 1Password command-line client.

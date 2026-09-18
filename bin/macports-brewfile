@@ -27,9 +27,12 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: macports-brewfile install [--dry-run] BREWFILE...
+Usage:
+  macports-brewfile install [--dry-run] BREWFILE...
+  macports-brewfile refresh-fallbacks [--dry-run]
+  macports-brewfile update [--dry-run]
 
-Install Brewfile CLI declarations through MacPorts and report GUI follow-up.
+Install Brewfile CLI declarations, refresh fallback releases, or update MacPorts.
 EOF
 }
 
@@ -274,6 +277,15 @@ run_brewfile() {
   report_manual_casks "$brewfile"
 }
 
+run_all_fallbacks() {
+  awk -F '\t' '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    $3 == "fallback" { print $1 "\t" $2 }
+  ' "$map_file" | while IFS="$(printf '\t')" read -r kind token; do
+    run_macports_item "$kind" "$token"
+  done
+}
+
 print_summary() {
   if [ -s "$unresolved_file" ]; then
     log "Unresolved packages:"
@@ -316,10 +328,14 @@ print_install_notes() {
 
 command_name="$1"
 shift
-[ "$command_name" = install ] || {
+
+case "$command_name" in
+install | refresh-fallbacks | update) ;;
+*)
   usage >&2
   exit 1
-}
+  ;;
+esac
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -340,15 +356,26 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ "$#" -gt 0 ] || die "At least one Brewfile is required."
-
-for brewfile in "$@"; do
-  [ -f "$brewfile" ] || die "Brewfile does not exist: $brewfile"
-done
+case "$command_name" in
+install)
+  [ "$#" -gt 0 ] || die "At least one Brewfile is required."
+  for brewfile in "$@"; do
+    [ -f "$brewfile" ] || die "Brewfile does not exist: $brewfile"
+  done
+  ;;
+refresh-fallbacks | update)
+  [ "$#" -eq 0 ] || die "$command_name does not accept Brewfiles."
+  ;;
+esac
 
 validate_map
 
-if [ ! -x "$port_bin" ]; then
+requires_macports=false
+case "$command_name" in
+install | update) requires_macports=true ;;
+esac
+
+if "$requires_macports" && [ ! -x "$port_bin" ]; then
   if "$dry_run"; then
     log "MacPorts would be required at $port_bin."
   else
@@ -365,18 +392,41 @@ notes_file="$state_dir/notes"
 sudo_refresh_sleep_file="$state_dir/sudo-refresh-sleep"
 trap cleanup 0 HUP INT TERM
 
-if "$dry_run"; then
-  log "Would run: sudo $port_bin selfupdate"
-else
-  start_sudo_session
-  if ! run_privileged_port selfupdate; then
-    die "MacPorts selfupdate failed. Resolve the error above, then rerun macports-brewfile."
+case "$command_name" in
+install)
+  if "$dry_run"; then
+    log "Would run: sudo $port_bin selfupdate"
+  else
+    start_sudo_session
+    if ! run_privileged_port selfupdate; then
+      die "MacPorts selfupdate failed. Resolve the error above, then rerun macports-brewfile."
+    fi
   fi
-fi
 
-for brewfile in "$@"; do
-  run_brewfile "$brewfile"
-done
+  for brewfile in "$@"; do
+    run_brewfile "$brewfile"
+  done
+  ;;
+refresh-fallbacks)
+  run_all_fallbacks
+  ;;
+update)
+  if "$dry_run"; then
+    log "Would run: sudo $port_bin selfupdate"
+    log "Would run: sudo $port_bin upgrade outdated"
+  else
+    start_sudo_session
+    if ! run_privileged_port selfupdate; then
+      die "MacPorts selfupdate failed. Resolve the error above, then rerun macports-brewfile."
+    fi
+    if ! run_privileged_port upgrade outdated; then
+      die "MacPorts upgrade failed. Resolve the error above, then rerun macports-update."
+    fi
+  fi
+
+  run_all_fallbacks
+  ;;
+esac
 
 print_summary
 if ! "$dry_run"; then
