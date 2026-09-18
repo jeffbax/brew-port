@@ -68,9 +68,12 @@ bp_fallback_inventory_entries() {
 		"$BP_JQ_BIN" -r '
       if type != "object" or .version != 1 or (.fallbacks | type != "array") then error("invalid fallback inventory")
       else .fallbacks[] | select(.kind | type == "string") | select(.token | type == "string") | [.kind, .token] | @tsv end
-    ' "$BP_FALLBACK_INVENTORY" || bp_die "Invalid fallback inventory: $BP_FALLBACK_INVENTORY"
+		' "$BP_FALLBACK_INVENTORY" || return 1
 	fi
-	[ -f "$BP_MANAGED_FALLBACKS" ] && awk -F '\t' 'NF { print "brew\t" $1 }' "$BP_MANAGED_FALLBACKS"
+	if [ -f "$BP_MANAGED_FALLBACKS" ]; then
+		awk -F '\t' 'NF { print "brew\t" $1 }' "$BP_MANAGED_FALLBACKS" || return 1
+	fi
+	return 0
 }
 
 bp_strip_ruby_comment() {
@@ -164,11 +167,19 @@ bp_run_brewfile() {
 }
 
 bp_refresh_fallbacks() {
-	local kind token row action
+	local kind token row action inventory_entries unique_entries
+	inventory_entries="$BP_TMP_DIR/fallback-inventory.tsv"
+	unique_entries="$BP_TMP_DIR/fallback-inventory-unique.tsv"
+	if ! bp_fallback_inventory_entries >"$inventory_entries"; then
+		bp_die "Invalid fallback inventory: $BP_FALLBACK_INVENTORY"
+	fi
+	if ! awk -F '\t' '!seen[$0]++' "$inventory_entries" >"$unique_entries"; then
+		bp_die 'Could not read fallback inventory.'
+	fi
 	while IFS=$'\t' read -r kind token; do
 		row="$(bp_lookup_mapping "$kind" "$token" || true)"
 		[ -n "$row" ] || continue
 		action="${row%%$'\034'*}"
 		case "$action" in fallback | fallback-root) bp_run_mapping "$kind" "$token" ;; esac
-	done < <(bp_fallback_inventory_entries | awk -F '\t' '!seen[$0]++')
+	done <"$unique_entries"
 }

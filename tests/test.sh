@@ -250,6 +250,14 @@ not_contains 'Would run reviewed fallback for rtk' "$output"
 not_contains 'Would run reviewed fallback for signal-cli' "$output"
 not_contains 'Would run reviewed fallback for worktrunk' "$output"
 
+invalid_inventory_state="$tmp_dir/invalid-inventory-state"
+mkdir -p "$invalid_inventory_state/brew-port"
+printf '%s\n' '{not valid json' >"$invalid_inventory_state/brew-port/requested-fallbacks.json"
+for inventory_command in refresh-fallbacks update; do
+	if output="$(XDG_STATE_HOME="$invalid_inventory_state" MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" "$inventory_command" --dry-run 2>&1)"; then fail "$inventory_command unexpectedly accepted an invalid fallback inventory."; fi
+	contains "Invalid fallback inventory: $invalid_inventory_state/brew-port/requested-fallbacks.json" "$output"
+done
+
 : >"$sudo_log"
 output="$(XDG_STATE_HOME="$tmp_dir/dry-state" MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" update --dry-run --map "$local_map")"
 contains "Would run: sudo $mock_port upgrade outdated" "$output"
