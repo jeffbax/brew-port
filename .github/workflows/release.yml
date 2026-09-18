@@ -27,7 +27,6 @@ jobs:
         id: macports
         with:
           parameters: .github/parameters/setup-macports.yaml
-          cache: disable
       - name: Expose MacPorts binaries
         run: echo "${{ steps.macports.outputs.prefix }}/bin" >> "$GITHUB_PATH"
       - name: Verify native architecture
