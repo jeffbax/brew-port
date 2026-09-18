@@ -36,9 +36,9 @@ EOF
 	esac
 }
 
-bp_extract_brew() { sed -nE 's/^[[:space:]]*brew[[:space:]]+"([^"]+)".*/\1/p' "$1"; }
-bp_extract_cask() { sed -nE 's/^[[:space:]]*cask[[:space:]]+"([^"]+)".*/\1/p' "$1"; }
-bp_extract_mas() { sed -nE 's/^[[:space:]]*mas[[:space:]]+"[^"]+",[[:space:]]*id:[[:space:]]*([0-9]+).*/\1/p' "$1"; }
+bp_extract_brew() { sed -nE "s/^[[:space:]]*brew[[:space:]]*\\(?[[:space:]]*[\"']([^\"']+)[\"'].*/\\1/p" "$1"; }
+bp_extract_cask() { sed -nE "s/^[[:space:]]*cask[[:space:]]*\\(?[[:space:]]*[\"']([^\"']+)[\"'].*/\\1/p" "$1"; }
+bp_extract_mas() { sed -nE "s/^[[:space:]]*mas[[:space:]]*\\(?[[:space:]]*[\"'][^\"']+[\"'],[[:space:]]*id:[[:space:]]*([0-9]+).*/\\1/p" "$1"; }
 
 bp_run_brewfile() {
 	local brewfile="$1" token action

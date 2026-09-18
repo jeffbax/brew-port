@@ -106,6 +106,14 @@ if output="$(MOCK_ARCH=x86_64 MOCK_TRANSLATED=1 SUDO_LOG="$sudo_log" BREW_PORT_U
 contains 'brew-port cannot run under Rosetta' "$output"
 not_contains 'Would run reviewed fallback' "$output"
 
+ruby_forms_brewfile="$tmp_dir/ruby-forms.Brewfile"
+printf '%s\n' "brew 'git'" 'brew("asmvik/formulae/skhd")' "cask '1password-cli'" 'cask("firefox")' >"$ruby_forms_brewfile"
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$ruby_forms_brewfile")"
+contains 'Would install MacPorts port git (for git)' "$output"
+contains 'Would install MacPorts port skhd (for asmvik/formulae/skhd)' "$output"
+contains 'Would install MacPorts port 1password-cli (for 1password-cli)' "$output"
+contains 'Install cask firefox manually' "$output"
+
 bad_map="$tmp_dir/bad.json"
 printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"bad","action":"fallback","target":"../escape.sh","architectures":["arm64"]}]}' >"$bad_map"
 if output="$("$utility" map validate --map "$bad_map" 2>&1)"; then fail 'Invalid map passed validation.'; fi
