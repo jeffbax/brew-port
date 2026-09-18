@@ -136,7 +136,8 @@ bp_run_mas() {
 }
 
 bp_run_brewfile() {
-	local brewfile="$1" line conditional_depth=0
+	local brewfile="$1" line token conditional_depth=0
+	local -a brews=() casks=() mas_apps=()
 	while IFS= read -r line || [ -n "$line" ]; do
 		if [[ "$line" =~ ^[[:space:]]*end([[:space:]]|$) ]]; then
 			[ "$conditional_depth" -gt 0 ] && conditional_depth=$((conditional_depth - 1))
@@ -152,11 +153,14 @@ bp_run_brewfile() {
 			continue
 		fi
 		case "$BP_DECLARATION_KIND" in
-		brew) bp_run_mapping brew "$BP_DECLARATION_TOKEN" ;;
-		cask) bp_run_cask "$BP_DECLARATION_TOKEN" ;;
-		mas) bp_run_mas "$BP_DECLARATION_TOKEN" ;;
+		brew) brews+=("$BP_DECLARATION_TOKEN") ;;
+		cask) casks+=("$BP_DECLARATION_TOKEN") ;;
+		mas) mas_apps+=("$BP_DECLARATION_TOKEN") ;;
 		esac
 	done <"$brewfile"
+	for token in "${brews[@]}"; do bp_run_mapping brew "$token"; done
+	for token in "${casks[@]}"; do bp_run_cask "$token"; done
+	for token in "${mas_apps[@]}"; do bp_run_mas "$token"; done
 }
 
 bp_refresh_fallbacks() {

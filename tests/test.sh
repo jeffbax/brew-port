@@ -161,7 +161,8 @@ cat >"$local_map" <<'EOF'
  {"kind":"brew","token":"multiline-tool","action":"fallback","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"First line\nSecond line"},
  {"kind":"brew","token":"escaped-tool","action":"fallback","target":"fallbacks/escaped-tool.sh","architectures":["arm64"],"note":"must remain in this map"},
  {"kind":"brew","token":"failing-port","action":"port","target":"fails-to-install","note":"test a port failure"},
- {"kind":"brew","token":"failing-fallback","action":"fallback","target":"fallbacks/failing-fallback.sh","architectures":["arm64"],"note":"test a fallback failure"}
+ {"kind":"brew","token":"failing-fallback","action":"fallback","target":"fallbacks/failing-fallback.sh","architectures":["arm64"],"note":"test a fallback failure"},
+ {"kind":"brew","token":"mas-client","action":"fallback","target":"fallbacks/install-test-mas.sh","architectures":["arm64"],"note":"install the test MAS client first"}
 ]}
 EOF
 cat >"$map_dir/fallbacks/root-tool.sh" <<'EOF'
@@ -171,6 +172,15 @@ EOF
 chmod +x "$map_dir/fallbacks/root-tool.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$map_dir/fallbacks/failing-fallback.sh"
 chmod +x "$map_dir/fallbacks/failing-fallback.sh"
+cat >"$map_dir/fallbacks/install-test-mas.sh" <<'EOF'
+#!/usr/bin/env bash
+cat >"$BREW_PORT_TEST_MAS_BIN/mas" <<'MAS'
+#!/usr/bin/env bash
+case "$1" in install) printf '%s\n' "$*" >>"$MAS_LOG" ;; *) exit 2 ;; esac
+MAS
+chmod +x "$BREW_PORT_TEST_MAS_BIN/mas"
+EOF
+chmod +x "$map_dir/fallbacks/install-test-mas.sh"
 outside_fallback="$tmp_dir/outside-fallback.sh"
 printf '%s\n' '#!/usr/bin/env bash' >"$outside_fallback"
 chmod +x "$outside_fallback"
@@ -182,6 +192,14 @@ contains 'local override' "$output"
 
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" refresh-fallbacks --dry-run --map "$local_map")"
 not_contains 'Would run reviewed fallback' "$output"
+
+ordered_mas_bin="$tmp_dir/ordered-mas-bin"
+mkdir -p "$ordered_mas_bin"
+ordered_mas_brewfile="$tmp_dir/ordered-mas.Brewfile"
+printf '%s\n' 'mas "Ordered App", id: 54321' 'brew "mas-client"' >"$ordered_mas_brewfile"
+: >"$mas_log"
+PATH="$ordered_mas_bin:$PATH" MAS_LOG="$mas_log" BREW_PORT_TEST_MAS_BIN="$ordered_mas_bin" MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --map "$local_map" "$ordered_mas_brewfile" >/dev/null
+grep -Fqx 'install 54321' "$mas_log" || fail 'A Brewfile MAS entry ran before its client prerequisite.'
 
 duplicate_map="$tmp_dir/duplicate-map.json"
 cat >"$duplicate_map" <<'EOF'
@@ -227,7 +245,7 @@ contains 'git: local override' "$output"
 
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" refresh-fallbacks --dry-run --map "$local_map")"
 contains 'Would run reviewed fallback for root-tool' "$output"
-not_contains 'Would run reviewed fallback for mas' "$output"
+not_contains 'Would run reviewed fallback for mas:' "$output"
 not_contains 'Would run reviewed fallback for rtk' "$output"
 not_contains 'Would run reviewed fallback for signal-cli' "$output"
 not_contains 'Would run reviewed fallback for worktrunk' "$output"
