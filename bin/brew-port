@@ -2,7 +2,16 @@
 # brew-port: interpret Homebrew Brewfiles with MacPorts, without selecting a manager.
 set -euo pipefail
 
-BP_BIN_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+BP_ENTRYPOINT="$0"
+while [ -L "$BP_ENTRYPOINT" ]; do
+	BP_ENTRYPOINT_DIR="$(CDPATH='' cd -- "$(dirname -- "$BP_ENTRYPOINT")" && pwd -P)"
+	BP_LINK_TARGET="$(readlink "$BP_ENTRYPOINT")"
+	case "$BP_LINK_TARGET" in
+	/*) BP_ENTRYPOINT="$BP_LINK_TARGET" ;;
+	*) BP_ENTRYPOINT="$BP_ENTRYPOINT_DIR/$BP_LINK_TARGET" ;;
+	esac
+done
+BP_BIN_DIR="$(CDPATH='' cd -- "$(dirname -- "$BP_ENTRYPOINT")" && pwd -P)"
 BP_REPO_DIR="$(CDPATH='' cd -- "$BP_BIN_DIR/.." && pwd)"
 # shellcheck source=lib/brew-port/common.bash
 source "$BP_BIN_DIR/lib/brew-port/common.bash"

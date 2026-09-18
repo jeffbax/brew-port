@@ -45,6 +45,10 @@ command -v "$shfmt_bin" >/dev/null || fail 'shfmt is required to run the checks.
 [ ! -e "$repo_dir/bin/macports-brewfile" ] || fail 'The old CLI must not remain.'
 [ -f "$repo_dir/.agents/skills/brew-port/SKILL.md" ] || fail 'Missing agent skill.'
 "$utility" map validate | grep -Fq 'Mappings are valid.'
+linked_bin="$tmp_dir/linked-bin"
+mkdir -p "$linked_bin"
+ln -s "$utility" "$linked_bin/brew-port"
+"$linked_bin/brew-port" version | grep -Fqx 'brew-port 0.1.0' || fail 'A symlinked entrypoint could not locate its libraries.'
 "$utility" map init >/dev/null
 [ -f "$XDG_CONFIG_HOME/brew-port/mappings.json" ] || fail 'map init did not create an override file.'
 "$utility" map validate >/dev/null
