@@ -1,0 +1,52 @@
+{
+  "$schema": "./mappings.schema.json",
+  "version": 1,
+  "mappings": [
+    {
+      "kind": "brew",
+      "token": "asmvik/formulae/skhd",
+      "action": "port",
+      "target": "skhd",
+      "note": "MacPorts ships skhd without the Homebrew tap namespace."
+    },
+    {
+      "kind": "brew",
+      "token": "mas",
+      "action": "fallback-root",
+      "target": "fallbacks/install-mas.sh",
+      "architectures": ["x86_64", "arm64"],
+      "note": "Install the matching verified upstream native package; the arm64 package does not use Rosetta."
+    },
+    {
+      "kind": "brew",
+      "token": "rtk",
+      "action": "fallback",
+      "target": "fallbacks/install-rtk.sh",
+      "architectures": ["x86_64", "arm64"],
+      "note": "No verified MacPorts port; install the matching verified upstream native release locally."
+    },
+    {
+      "kind": "brew",
+      "token": "signal-cli",
+      "action": "fallback-root",
+      "target": "fallbacks/install-signal-cli.sh",
+      "architectures": ["x86_64", "arm64"],
+      "note": "MacPorts has no port; install OpenJDK 25 and the verified upstream bundle with its native libsignal slice."
+    },
+    {
+      "kind": "brew",
+      "token": "worktrunk",
+      "action": "fallback",
+      "target": "fallbacks/install-worktrunk.sh",
+      "architectures": ["x86_64", "arm64"],
+      "note": "MacPorts' wt port is a different C++ Web Toolkit; use a matching native release."
+    },
+    {
+      "kind": "cask",
+      "token": "1password-cli",
+      "action": "port",
+      "target": "1password-cli",
+      "note": "MacPorts packages the 1Password command-line client."
+    }
+  ]
+}

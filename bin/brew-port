@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# brew-port: interpret Homebrew Brewfiles with MacPorts, without selecting a manager.
+set -euo pipefail
+
+BP_BIN_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+BP_REPO_DIR="$(CDPATH='' cd -- "$BP_BIN_DIR/.." && pwd)"
+# shellcheck source=lib/brew-port/common.bash
+source "$BP_BIN_DIR/lib/brew-port/common.bash"
+source "$BP_BIN_DIR/lib/brew-port/maps.bash"
+source "$BP_BIN_DIR/lib/brew-port/reporting.bash"
+source "$BP_BIN_DIR/lib/brew-port/macports.bash"
+source "$BP_BIN_DIR/lib/brew-port/fallbacks.bash"
+
+BP_VERSION=0.1.0
+BP_DRY_RUN=false
+
+usage() {
+	cat <<'EOF'
+Usage:
+  brew-port install [--dry-run] [--map FILE ...] BREWFILE...
+  brew-port update [--dry-run] [--map FILE ...]
+  brew-port refresh-fallbacks [--dry-run] [--map FILE ...]
+  brew-port doctor
+  brew-port version
+  brew-port map init | validate [--map FILE ...] | explain KIND TOKEN [--map FILE ...]
+  brew-port completion SHELL
+  brew-port completion install SHELL
+
+Mapping layers are bundled defaults, $XDG_CONFIG_HOME/brew-port/mappings.json,
+then each --map file in order. BREW_PORT_PORT_BIN selects a non-default port.
+EOF
+}
+
+parse_common_options() {
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--dry-run)
+			BP_DRY_RUN=true
+			shift
+			;;
+		--map)
+			[ "$#" -ge 2 ] || bp_die '--map requires a file'
+			bp_add_map "$2"
+			shift 2
+			;;
+		--help | -h)
+			usage
+			exit 0
+			;;
+		--*) bp_die "Unknown option: $1" ;;
+		*)
+			BP_REMAINING=("$@")
+			return 0
+			;;
+		esac
+	done
+	BP_REMAINING=()
+}
+
+prepare_maps() {
+	bp_find_jq
+	[ -n "$BP_JQ_BIN" ] && [ -x "$BP_JQ_BIN" ] || bp_die 'jq is required to inspect mappings. Run a package-changing command to bootstrap MacPorts jq.'
+	bp_validate_maps
+	bp_make_effective_map
+}
+
+prepare_mutating() {
+	bp_detect_host
+	bp_find_port
+	bp_find_jq
+	bp_require_macos
+	bp_require_port
+	if ! bp_ensure_jq; then bp_die 'jq is an unmet prerequisite for this dry-run.'; fi
+	bp_validate_maps
+	bp_make_effective_map
+	bp_report_init
+}
+
+install_command() {
+	parse_common_options "$@"
+	[ "${#BP_REMAINING[@]}" -gt 0 ] || bp_die 'At least one Brewfile is required.'
+	local brewfile
+	for brewfile in "${BP_REMAINING[@]}"; do [ -f "$brewfile" ] || bp_die "Brewfile does not exist: $brewfile"; done
+	prepare_mutating
+	bp_selfupdate
+	for brewfile in "${BP_REMAINING[@]}"; do bp_run_brewfile "$brewfile"; done
+	bp_report
+}
+
+update_command() {
+	parse_common_options "$@"
+	[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'update does not accept Brewfiles.'
+	prepare_mutating
+	bp_selfupdate
+	if "$BP_DRY_RUN"; then
+		bp_log "Would run: sudo $BP_PORT_BIN upgrade outdated"
+	else
+		bp_start_sudo
+		bp_port upgrade outdated || bp_die 'MacPorts upgrade failed.'
+	fi
+	bp_refresh_fallbacks
+	bp_report
+}
+
+refresh_command() {
+	parse_common_options "$@"
+	[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'refresh-fallbacks does not accept Brewfiles.'
+	prepare_mutating
+	bp_selfupdate
+	bp_refresh_fallbacks
+	bp_report
+}
+
+doctor_command() {
+	[ "$#" -eq 0 ] || bp_die 'doctor does not accept options.'
+	bp_detect_host
+	bp_find_port
+	bp_find_jq
+	bp_init_maps
+	bp_log "macOS: $(command -v sw_vers >/dev/null 2>&1 && sw_vers -productVersion || printf 'not detected')"
+	bp_log "Architecture: $BP_ARCH"
+	bp_log "MacPorts binary: ${BP_PORT_BIN:-not found}"
+	if [ -n "$BP_PORT_BIN" ] && [ -x "$BP_PORT_BIN" ] && "$BP_PORT_BIN" version >/dev/null 2>&1; then bp_log 'MacPorts status: usable'; else bp_log 'MacPorts status: unavailable or broken'; fi
+	bp_log "jq: ${BP_JQ_BIN:-not found}"
+	bp_log 'Effective maps:'
+	local map_file
+	for map_file in "${BP_MAP_FILES[@]}"; do bp_log "  $map_file"; done
+	if [ -n "$BP_JQ_BIN" ] && [ -x "$BP_JQ_BIN" ]; then
+		if bp_validate_maps; then
+			local kind token row action target note arches source
+			while IFS=$'\t' read -r kind token; do
+				row="$(bp_lookup_mapping "$kind" "$token")"
+				IFS=$'\034' read -r action target note arches source <<EOF
+$row
+EOF
+				case "$action" in fallback | fallback-root)
+					if bp_arch_supported "$arches"; then bp_log "Fallback $kind/$token: compatible with $BP_ARCH"; else bp_log "Fallback $kind/$token: no verified native $BP_ARCH fallback"; fi
+					;;
+				esac
+			done < <("$BP_JQ_BIN" -r '.mappings[] | [.kind, .token] | @tsv' "$BP_BUNDLED_MAP")
+		fi
+	else
+		bp_log 'Fallback compatibility: jq is required to evaluate maps.'
+	fi
+}
+
+map_command() {
+	local subcommand="${1:-}"
+	[ -n "$subcommand" ] || bp_die 'map requires init, validate, or explain.'
+	shift
+	bp_init_maps
+	case "$subcommand" in
+	init)
+		[ "$#" -eq 0 ] || bp_die 'map init does not accept options.'
+		local parent
+		parent="$(dirname "$BP_USER_MAP")"
+		[ ! -e "$BP_USER_MAP" ] || bp_die "Mapping file already exists: $BP_USER_MAP"
+		mkdir -p "$parent/fallbacks"
+		printf '%s\n' '{"version":1,"mappings":[]}' >"$BP_USER_MAP"
+		bp_log "Created $BP_USER_MAP and $parent/fallbacks/."
+		;;
+	validate)
+		parse_common_options "$@"
+		[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'map validate accepts only --map.'
+		BP_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/brew-port.XXXXXX")"
+		trap bp_cleanup EXIT HUP INT TERM
+		prepare_maps
+		bp_log 'Mappings are valid.'
+		;;
+	explain)
+		[ "$#" -ge 2 ] || bp_die 'Usage: brew-port map explain KIND TOKEN [--map FILE ...]'
+		local kind="$1" token="$2"
+		shift 2
+		parse_common_options "$@"
+		[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'Unexpected map explain argument.'
+		BP_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/brew-port.XXXXXX")"
+		trap bp_cleanup EXIT HUP INT TERM
+		prepare_maps
+		bp_map_explain "$kind" "$token"
+		;;
+	*) bp_die "Unknown map command: $subcommand" ;;
+	esac
+}
+
+completion_command() {
+	local install=false shell="${1:-}"
+	[ -n "$shell" ] || bp_die 'completion requires a shell.'
+	if [ "$shell" = install ]; then
+		install=true
+		shell="${2:-}"
+		[ -n "$shell" ] || bp_die 'completion install requires a shell.'
+		[ "$#" -eq 2 ] || bp_die 'Unexpected completion argument.'
+	else [ "$#" -eq 1 ] || bp_die 'Unexpected completion argument.'; fi
+	local source_file destination
+	case "$shell" in
+	bash)
+		source_file="$BP_REPO_DIR/completions/brew-port.bash"
+		destination="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/brew-port"
+		;;
+	fish)
+		source_file="$BP_REPO_DIR/completions/brew-port.fish"
+		destination="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/brew-port.fish"
+		;;
+	zsh)
+		source_file="$BP_REPO_DIR/completions/brew-port.zsh"
+		destination="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/completions/_brew-port"
+		;;
+	*) bp_die "Unsupported shell: $shell (use bash, fish, or zsh)" ;;
+	esac
+	if "$install"; then
+		mkdir -p "$(dirname "$destination")"
+		cp "$source_file" "$destination"
+		bp_log "Installed $shell completion: $destination"
+	else cat "$source_file"; fi
+}
+
+[ "$#" -gt 0 ] || {
+	usage >&2
+	exit 1
+}
+BP_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/brew-port.XXXXXX")"
+trap bp_cleanup EXIT HUP INT TERM
+bp_init_maps
+command_name="$1"
+shift
+case "$command_name" in
+install) install_command "$@" ;;
+update) update_command "$@" ;;
+refresh-fallbacks) refresh_command "$@" ;;
+doctor) doctor_command "$@" ;;
+version)
+	[ "$#" -eq 0 ] || bp_die 'version does not accept options.'
+	bp_log "brew-port $BP_VERSION"
+	;;
+map) map_command "$@" ;;
+completion) completion_command "$@" ;;
+--help | -h | help) usage ;;
+*)
+	usage >&2
+	exit 1
+	;;
+esac

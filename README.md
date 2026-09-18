@@ -1,92 +1,51 @@
-# macports-brewfile
+# brew-port
 
-`macports-brewfile` installs the CLI portion of one or more Homebrew
-`Brewfile`s with MacPorts. It is a private, personal utility intended for
-Intel macOS machines where MacPorts is the preferred package manager.
+`brew-port` reads CLI declarations from Homebrew Brewfiles and applies matching MacPorts actions. It is a macOS/MacPorts tool: it never installs Homebrew or chooses a package manager.
 
-It treats Brewfiles as declarations, not as instructions to run Homebrew:
+It reads `uname -m` on every invocation. Native `x86_64` and `arm64` are equally supported when MacPorts and the requested package are available. A fallback runs only when its map declares support for the live native architecture. Intel-only fallbacks are unresolved on Apple Silicon: brew-port never invokes Rosetta or silently substitutes a different port.
 
-- unlisted `brew` declarations install same-named MacPorts ports;
-- `maps/default.tsv` records aliases, intentional skips, and reviewed
-  fallbacks;
-- fallback tools install verified upstream Intel macOS release binaries into
-  `~/.local/bin`;
-- a mapping can explicitly override an otherwise-valid MacPorts port with a
-  manual fallback when that port is broken;
-- mapped casks can install MacPorts CLI ports, while other casks are reported
-  for manual installation;
-- `mas` declarations are installed when the Mac App Store is signed in.
+## Use
 
-## Prerequisites
+Install MacPorts for the current macOS release first. brew-port searches `/opt/local/bin/port` first, then `port` on `PATH`; set `BREW_PORT_PORT_BIN=/path/to/port` for a non-default prefix. Host facts are detected, never persisted.
 
-Install MacPorts at its default `/opt/local` prefix. The command asks for an
-administrator password once at the start, uses that authorization only for
-MacPorts operations, and refreshes it while a long run is active. It does not
-extend the normal sudo timeout after the command exits. For Mac App Store
-entries, sign in to the App Store first.
-
-## Usage
+JSON work needs `/opt/local/bin/jq` or `/usr/bin/jq`. If it is missing, `install`, `update`, and `refresh-fallbacks` selfupdate MacPorts and install its `jq` port under the existing sudo lease. `doctor` and `map` remain non-mutating and explain the prerequisite.
 
 ```sh
-bin/macports-brewfile install Brewfile.common Brewfile.common.darwin
-bin/macports-brewfile install --dry-run Brewfile.common Brewfile.common.darwin
-bin/macports-brewfile refresh-fallbacks
-bin/macports-update
-bin/macports-update --dry-run
+bin/brew-port install Brewfile
+bin/brew-port install --dry-run --map ./my-mappings.json Brewfile
+bin/brew-port update
+bin/brew-port refresh-fallbacks
+bin/brew-port doctor
+bin/brew-port map validate --map ./my-mappings.json
+bin/brew-port map explain brew rtk
 ```
 
-`--dry-run` prints the port, fallback, MAS, skip, and manual-GUI actions
-without running `sudo`, `port`, `mas`, downloads, or fallback scripts.
+`--dry-run` makes no downloads, package installs, sudo calls, or writes. Normal `install` selfupdates before ports. `update` additionally runs `port upgrade outdated`.
 
-Normal runs retain MacPorts and fallback output in the terminal. At the end,
-they repeat the MacPorts package notes in one `MacPorts installation notes:`
-section, labelled by the command that produced each note. This makes required
-post-install setup easy to review without hiding progress during installation.
+## JSON mappings
 
-Normal `install` runs `port selfupdate` to refresh the ports tree, but does
-not run `port upgrade outdated`. Use `bin/macports-update` for intentional
-maintenance: it runs `selfupdate`, upgrades every outdated MacPorts port, and
-then refreshes the fallback tools. It stops before fallback refreshes if either
-MacPorts step fails, and does not remove inactive ports.
+Maps layer as bundled `maps/default.json`, `${XDG_CONFIG_HOME:-~/.config}/brew-port/mappings.json`, then repeated `--map FILE` arguments from left to right. Later entries with the same `kind` and `token` replace earlier ones. The independently authored [schema](maps/mappings.schema.json) defines the format. `brew-port map init` creates a user file and its adjacent `fallbacks/` directory.
 
-## Fallback releases
+Actions are `port`, `skip`, `fallback`, and `fallback-root`. Fallback script targets must remain below the mapping file’s `fallbacks/` directory. `fallback-root` is explicitly user-trusted code that may reuse the active sudo lease; review every URL, checksum, destination, and privileged command.
 
-Each normal Intel install checks GitHub Releases for the latest `rtk` and
-Worktrunk Intel macOS asset. It downloads only when that release differs from
-the verified local state or its installed binary is missing; unchanged releases
-do not trigger a Cargo build or a binary download.
+Fallback maps declare their verified architectures and bundled installers choose matching release assets. MAS uses its matching arm64 or x86_64 package. signal-cli uses its official bundle (which contains matching macOS libsignal slices) and installs MacPorts OpenJDK 25 under the active sudo lease.
 
-The state file is
-`${XDG_STATE_HOME:-~/.local/state}/macports-brewfile/fallbacks.tsv`. It records
-the release tag, asset URL, published SHA-256 digest, and installed-binary
-digest. A changed digest for an already-recorded tag is rejected. If GitHub is
-temporarily unavailable, an existing verified fallback is retained with a
-warning; a missing fallback is reported as unresolved.
-
-## Mapping rules
-
-`maps/default.tsv` is tab-separated with five fields:
-
-```text
-declaration-kind  homebrew-token  action  target  note
-```
-
-`action` is `port`, `fallback`, `fallback-root`, or `skip`. Fallback targets
-are scripts below `fallbacks/`; they install verified upstream release binaries into
-`~/.local/bin`.
-
-Use `fallback-root` for a reviewed fallback that needs the active sudo lease,
-such as the official MAS installer package. It overrides the normal same-named
-MacPorts lookup and does not produce an extra password prompt during an
-`install` or `macports-update` run.
-Individual package failures and intentional skips are reported at the end so
-the remaining declarations can continue.
-
-## Updating
-
-This utility never updates itself. Pull changes explicitly, then rerun the
-same `install` command (or the chezmoi bootstrap that invokes it):
+## Completions
 
 ```sh
-git -C ~/Developer/macports-brewfile pull
+bin/brew-port completion fish
+bin/brew-port completion install fish
 ```
+
+Static Bash, Fish, and Zsh completions are included. Installation writes only the selected user completion file and never edits shell startup files.
+
+## Development
+
+Install `shfmt` (for example, `sudo port install shfmt`), then run:
+
+```sh
+shfmt -ln bash -w bin/brew-port bin/lib/brew-port/*.bash maps/fallbacks/*.sh completions/brew-port.bash tests/test.sh
+tests/test.sh
+```
+
+The test suite enforces `shfmt -d`, Bash syntax checks, and ShellCheck.
