@@ -108,7 +108,8 @@ cat >"$local_map" <<'EOF'
 {"version":1,"mappings":[
  {"kind":"brew","token":"git","action":"skip","note":"local override"},
  {"kind":"brew","token":"root-tool","action":"fallback-root","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"local trusted test fallback"},
- {"kind":"brew","token":"multiline-tool","action":"fallback","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"First line\nSecond line"}
+ {"kind":"brew","token":"multiline-tool","action":"fallback","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"First line\nSecond line"},
+ {"kind":"brew","token":"escaped-tool","action":"fallback","target":"fallbacks/escaped-tool.sh","architectures":["arm64"],"note":"must remain in this map"}
 ]}
 EOF
 cat >"$map_dir/fallbacks/root-tool.sh" <<'EOF'
@@ -116,6 +117,10 @@ cat >"$map_dir/fallbacks/root-tool.sh" <<'EOF'
 "$BREW_PORT_SUDO_BIN" -n /usr/bin/true
 EOF
 chmod +x "$map_dir/fallbacks/root-tool.sh"
+outside_fallback="$tmp_dir/outside-fallback.sh"
+printf '%s\n' '#!/usr/bin/env bash' >"$outside_fallback"
+chmod +x "$outside_fallback"
+ln -s "$outside_fallback" "$map_dir/fallbacks/escaped-tool.sh"
 "$utility" map validate --map "$local_map" >/dev/null
 output="$("$utility" map explain brew git --map "$local_map")"
 contains 'skip' "$output"
@@ -140,6 +145,12 @@ output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname"
 contains 'Would run reviewed fallback for multiline-tool: First line' "$output"
 contains 'Second line' "$output"
 not_contains 'No verified native fallback for arm64' "$output"
+
+escaped_brewfile="$tmp_dir/escaped.Brewfile"
+printf '%s\n' 'brew "escaped-tool"' >"$escaped_brewfile"
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run --map "$local_map" "$escaped_brewfile")"
+contains 'Fallback target escapes the map fallbacks directory: fallbacks/escaped-tool.sh' "$output"
+not_contains 'Would run reviewed fallback for escaped-tool' "$output"
 
 root_brewfile="$tmp_dir/root.Brewfile"
 printf '%s\n' 'brew "git"' 'brew "root-tool"' >"$root_brewfile"

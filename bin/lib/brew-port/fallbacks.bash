@@ -17,7 +17,10 @@ EOF
 			bp_unresolved "$token" "No verified native fallback for $BP_ARCH. $note"
 			return 0
 		fi
-		fallback_path="$(bp_mapping_fallback_path "$source" "$target")"
+		if ! fallback_path="$(bp_mapping_fallback_path "$source" "$target")"; then
+			bp_unresolved "$token" "Fallback target escapes the map fallbacks directory: $target"
+			return 0
+		fi
 		if [ ! -f "$fallback_path" ]; then
 			bp_unresolved "$token" "Missing fallback: $target"
 			return 0

@@ -64,10 +64,30 @@ bp_decode_mapping_note() {
 	printf '%s\n' "$1" | "$BP_JQ_BIN" -r .
 }
 
+bp_canonical_path() {
+	local path="$1" path_dir link_target
+	while [ -L "$path" ]; do
+		path_dir="$(CDPATH='' cd -P -- "$(dirname -- "$path")" && pwd -P)" || return 1
+		link_target="$(readlink "$path")" || return 1
+		case "$link_target" in
+		/*) path="$link_target" ;;
+		*) path="$path_dir/$link_target" ;;
+		esac
+	done
+	path_dir="$(CDPATH='' cd -P -- "$(dirname -- "$path")" && pwd -P)" || return 1
+	printf '%s/%s\n' "$path_dir" "$(basename -- "$path")"
+}
+
 bp_mapping_fallback_path() {
-	local source_map="$1" target="$2" map_dir
-	map_dir="$(CDPATH='' cd -- "$(dirname -- "$source_map")" && pwd)"
-	printf '%s/%s\n' "$map_dir" "$target"
+	local source_map="$1" target="$2" canonical_map map_dir fallback_dir fallback_path
+	canonical_map="$(bp_canonical_path "$source_map")" || return 1
+	map_dir="$(dirname -- "$canonical_map")"
+	fallback_dir="$(bp_canonical_path "$map_dir/fallbacks")" || return 1
+	fallback_path="$(bp_canonical_path "$map_dir/$target")" || return 1
+	case "$fallback_path" in
+	"$fallback_dir"/*) printf '%s\n' "$fallback_path" ;;
+	*) return 1 ;;
+	esac
 }
 
 bp_arch_supported() {
