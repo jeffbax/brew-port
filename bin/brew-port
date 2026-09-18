@@ -84,6 +84,7 @@ prepare_mutating() {
 	bp_validate_maps
 	bp_make_effective_map
 	bp_report_init
+	bp_init_fallback_inventory
 }
 
 install_command() {

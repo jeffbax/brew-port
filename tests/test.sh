@@ -174,6 +174,9 @@ output="$("$utility" map explain brew git --map "$local_map")"
 contains 'skip' "$output"
 contains 'local override' "$output"
 
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" refresh-fallbacks --dry-run --map "$local_map")"
+not_contains 'Would run reviewed fallback' "$output"
+
 duplicate_map="$tmp_dir/duplicate-map.json"
 cat >"$duplicate_map" <<'EOF'
 {"version":1,"mappings":[
@@ -216,11 +219,18 @@ contains 'git: local override' "$output"
 [ "$(grep -Fxc -- "-n $mock_port selfupdate" "$sudo_log")" -eq 1 ] || fail 'Selfupdate did not reuse sudo.'
 [ "$(grep -Fxc -- '-n /usr/bin/true' "$sudo_log")" -eq 1 ] || fail 'fallback-root did not reuse sudo.'
 
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" refresh-fallbacks --dry-run --map "$local_map")"
+contains 'Would run reviewed fallback for root-tool' "$output"
+not_contains 'Would run reviewed fallback for mas' "$output"
+not_contains 'Would run reviewed fallback for rtk' "$output"
+not_contains 'Would run reviewed fallback for signal-cli' "$output"
+not_contains 'Would run reviewed fallback for worktrunk' "$output"
+
 : >"$sudo_log"
-output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" update --dry-run --map "$local_map")"
+output="$(XDG_STATE_HOME="$tmp_dir/dry-state" MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" update --dry-run --map "$local_map")"
 contains "Would run: sudo $mock_port upgrade outdated" "$output"
 [ ! -s "$sudo_log" ] || fail 'Dry-run update used sudo.'
-[ ! -e "$XDG_STATE_HOME/brew-port" ] || fail 'Dry-run update wrote fallback state.'
+[ ! -e "$tmp_dir/dry-state/brew-port" ] || fail 'Dry-run update wrote fallback state.'
 
 release_dir="$tmp_dir/release"
 mkdir -p "$release_dir/bin"
@@ -253,6 +263,9 @@ output="$(HOME="$fallback_home" XDG_STATE_HOME="$tmp_dir/state" BREW_PORT_ARCH=a
 contains 'Installed rtk release v1.2.3.' "$output"
 contains 'rtk-arm64' "$("$fallback_home/.local/bin/rtk")"
 grep -Fqx 'https://example.invalid/rtk/aarch64' "$curl_log" || fail 'arm64 fallback did not select the aarch64 asset.'
+
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" refresh-fallbacks --dry-run)"
+contains 'Would run reviewed fallback for rtk' "$output"
 
 signal_release_dir="$tmp_dir/signal-release"
 mkdir -p "$signal_release_dir/signal-cli-1.2.3/bin"

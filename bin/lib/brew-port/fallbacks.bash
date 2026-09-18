@@ -13,6 +13,7 @@ EOF
 	port) bp_install_port "$token" "$target" ;;
 	skip) bp_unresolved "$token" "$note" ;;
 	fallback | fallback-root)
+		bp_record_fallback "$kind" "$token"
 		if ! bp_arch_supported "$arches"; then
 			bp_unresolved "$token" "No verified native fallback for $BP_ARCH. $note"
 			return 0
@@ -34,6 +35,42 @@ EOF
 		BREW_PORT_ARCH="$BP_ARCH" BREW_PORT_PORT_BIN="$BP_PORT_BIN" BREW_PORT_SUDO_BIN="$BP_SUDO_BIN" BREW_PORT_JQ_BIN="$BP_JQ_BIN" bash "$fallback_path" || bp_action_failed "$token" "Fallback failed: $note"
 		;;
 	esac
+}
+
+bp_init_fallback_inventory() {
+	BP_FALLBACK_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/brew-port"
+	BP_FALLBACK_INVENTORY="$BP_FALLBACK_STATE_DIR/requested-fallbacks.json"
+	BP_MANAGED_FALLBACKS="$BP_FALLBACK_STATE_DIR/fallbacks.tsv"
+}
+
+bp_record_fallback() {
+	local kind="$1" token="$2" temporary_inventory
+	"$BP_DRY_RUN" && return 0
+	mkdir -p "$BP_FALLBACK_STATE_DIR"
+	chmod 700 "$BP_FALLBACK_STATE_DIR"
+	temporary_inventory="$BP_FALLBACK_STATE_DIR/.requested-fallbacks.$$"
+	if [ -f "$BP_FALLBACK_INVENTORY" ]; then
+		if ! "$BP_JQ_BIN" --arg kind "$kind" --arg token "$token" '
+      if type != "object" or .version != 1 or (.fallbacks | type != "array") then error("invalid fallback inventory")
+      else .fallbacks |= (map(select(.kind != $kind or .token != $token)) + [{kind: $kind, token: $token}]) end
+    ' "$BP_FALLBACK_INVENTORY" >"$temporary_inventory"; then
+			rm -f "$temporary_inventory"
+			bp_die "Invalid fallback inventory: $BP_FALLBACK_INVENTORY"
+		fi
+	else
+		"$BP_JQ_BIN" -n --arg kind "$kind" --arg token "$token" '{version: 1, fallbacks: [{kind: $kind, token: $token}]}' >"$temporary_inventory"
+	fi
+	mv "$temporary_inventory" "$BP_FALLBACK_INVENTORY"
+}
+
+bp_fallback_inventory_entries() {
+	if [ -f "$BP_FALLBACK_INVENTORY" ]; then
+		"$BP_JQ_BIN" -r '
+      if type != "object" or .version != 1 or (.fallbacks | type != "array") then error("invalid fallback inventory")
+      else .fallbacks[] | select(.kind | type == "string") | select(.token | type == "string") | [.kind, .token] | @tsv end
+    ' "$BP_FALLBACK_INVENTORY" || bp_die "Invalid fallback inventory: $BP_FALLBACK_INVENTORY"
+	fi
+	[ -f "$BP_MANAGED_FALLBACKS" ] && awk -F '\t' 'NF { print "brew\t" $1 }' "$BP_MANAGED_FALLBACKS"
 }
 
 bp_parse_brewfile_declaration() {
@@ -100,6 +137,11 @@ bp_run_brewfile() {
 }
 
 bp_refresh_fallbacks() {
-	local kind token
-	while IFS=$'\t' read -r kind token; do bp_run_mapping "$kind" "$token"; done < <("$BP_JQ_BIN" -r '.mappings[] | select(.action == "fallback" or .action == "fallback-root") | [.kind, .token] | @tsv' "$BP_EFFECTIVE_MAP")
+	local kind token row action
+	while IFS=$'\t' read -r kind token; do
+		row="$(bp_lookup_mapping "$kind" "$token" || true)"
+		[ -n "$row" ] || continue
+		action="${row%%$'\034'*}"
+		case "$action" in fallback | fallback-root) bp_run_mapping "$kind" "$token" ;; esac
+	done < <(bp_fallback_inventory_entries | awk -F '\t' '!seen[$0]++')
 }
