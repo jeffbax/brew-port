@@ -6,6 +6,10 @@ utility="$repo_dir/bin/brew-port"
 shfmt_bin="${SHFMT_BIN:-shfmt}"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/brew-port-test.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+# Entrypoints and mocks use env bash; keep subprocesses on the tested interpreter.
+mkdir "$tmp_dir/bash-runtime"
+ln -s "$BASH" "$tmp_dir/bash-runtime/bash"
+export PATH="$tmp_dir/bash-runtime:$PATH"
 export HOME="$tmp_dir/home"
 export XDG_CONFIG_HOME="$tmp_dir/config"
 export XDG_DATA_HOME="$tmp_dir/data"
@@ -82,7 +86,7 @@ MOCK_ARCH=arm64 MOCK_JQ_LOG="$jq_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_POR
 linked_bin="$tmp_dir/linked-bin"
 mkdir -p "$linked_bin"
 ln -s "$utility" "$linked_bin/brew-port"
-"$linked_bin/brew-port" version | grep -Fqx 'brew-port 0.1.0' || fail 'A symlinked entrypoint could not locate its libraries.'
+[ "$("$linked_bin/brew-port" version)" = "$("$utility" version)" ] || fail 'A symlinked entrypoint could not locate its libraries.'
 "$utility" map init >/dev/null
 [ -f "$XDG_CONFIG_HOME/brew-port/mappings.json" ] || fail 'map init did not create an override file.'
 "$utility" map validate >/dev/null

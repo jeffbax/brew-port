@@ -1,0 +1,53 @@
+name: Draft release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  checks:
+    name: Release checks (${{ matrix.runner }}, ${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-26-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify native architecture
+        run: test "$(uname -m)" = "$EXPECTED_ARCH"
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+      - run: brew install shfmt shellcheck jq bash
+      - run: /bin/bash tests/test.sh && /bin/bash tests/release.sh
+      - run: |
+          "$(brew --prefix)/bin/bash" tests/test.sh
+          "$(brew --prefix)/bin/bash" tests/release.sh
+  release:
+    needs: checks
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/package-release.sh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Create draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --prerelease --title "brew-port $RELEASE_TAG" --generate-notes
+          else
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --title "brew-port $RELEASE_TAG" --generate-notes
+          fi
