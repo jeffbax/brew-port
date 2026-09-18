@@ -78,6 +78,7 @@ prepare_mutating() {
 	bp_find_port
 	bp_find_jq
 	bp_require_macos
+	bp_require_native_execution
 	bp_require_port
 	if ! bp_ensure_jq; then bp_die 'jq is an unmet prerequisite for this dry-run.'; fi
 	bp_validate_maps

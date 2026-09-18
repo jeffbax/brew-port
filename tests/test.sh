@@ -22,6 +22,7 @@ not_contains() { [[ "$2" != *"$1"* ]] || fail "Expected output not to contain: $
 mock_uname="$tmp_dir/uname"
 mock_port="$tmp_dir/port"
 mock_sudo="$tmp_dir/sudo"
+mock_sysctl="$tmp_dir/sysctl"
 sudo_log="$tmp_dir/sudo.log"
 jq_log="$tmp_dir/jq.log"
 cat >"$mock_uname" <<'EOF'
@@ -38,6 +39,11 @@ echo "$*" >>"${SUDO_LOG:?}"
 case "$1" in -v) exit 0 ;; -n) shift; exec "$@" ;; *) exit 2 ;; esac
 EOF
 chmod +x "$mock_uname" "$mock_port" "$mock_sudo"
+cat >"$mock_sysctl" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in '-in sysctl.proc_translated') echo "${MOCK_TRANSLATED:-0}" ;; *) exit 2 ;; esac
+EOF
+chmod +x "$mock_sysctl"
 
 custom_port_bin="$tmp_dir/custom-macports/bin"
 mkdir -p "$custom_port_bin"
@@ -95,6 +101,10 @@ contains 'Would run reviewed fallback for mas' "$output"
 contains 'Would run reviewed fallback for rtk' "$output"
 contains 'Would run reviewed fallback for signal-cli' "$output"
 not_contains 'No verified native fallback for arm64' "$output"
+
+if output="$(MOCK_ARCH=x86_64 MOCK_TRANSLATED=1 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_SYSCTL_BIN="$mock_sysctl" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$brewfile" 2>&1)"; then fail 'Rosetta execution unexpectedly proceeded.'; fi
+contains 'brew-port cannot run under Rosetta' "$output"
+not_contains 'Would run reviewed fallback' "$output"
 
 bad_map="$tmp_dir/bad.json"
 printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"bad","action":"fallback","target":"../escape.sh","architectures":["arm64"]}]}' >"$bad_map"

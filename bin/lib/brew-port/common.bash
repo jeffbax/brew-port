@@ -11,10 +11,19 @@ bp_command_path() {
 }
 
 bp_detect_host() {
+	local translated
 	BP_OS="$("${BREW_PORT_UNAME_BIN:-uname}" -s)"
 	BP_ARCH="$("${BREW_PORT_UNAME_BIN:-uname}" -m)"
+	BP_TRANSLATED=false
+	if [ "$BP_OS" = Darwin ] && [ "$BP_ARCH" = x86_64 ]; then
+		translated="$("${BREW_PORT_SYSCTL_BIN:-sysctl}" -in sysctl.proc_translated 2>/dev/null || true)"
+		if [ "$translated" = 1 ]; then
+			BP_TRANSLATED=true
+			BP_ARCH=translated
+		fi
+	fi
 	case "$BP_ARCH" in
-	x86_64 | arm64) ;;
+	x86_64 | arm64 | translated) ;;
 	*) BP_ARCH=unsupported ;;
 	esac
 }
@@ -45,6 +54,10 @@ bp_find_jq() {
 
 bp_require_macos() {
 	[ "$BP_OS" = Darwin ] || bp_die "brew-port supports macOS only (detected $BP_OS)."
+}
+
+bp_require_native_execution() {
+	[ "$BP_TRANSLATED" = false ] || bp_die 'brew-port cannot run under Rosetta. Use a native arm64 terminal.'
 }
 
 bp_require_port() {
