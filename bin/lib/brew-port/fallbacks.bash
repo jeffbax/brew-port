@@ -8,6 +8,7 @@ bp_run_mapping() {
 	IFS=$'\034' read -r action target note arches source <<EOF
 $row
 EOF
+	note="$(bp_decode_mapping_note "$note")"
 	case "$action" in
 	port) bp_install_port "$token" "$target" ;;
 	skip) bp_unresolved "$token" "$note" ;;

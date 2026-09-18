@@ -42,14 +42,15 @@ bp_make_effective_map() {
     .mappings |= (map(select(.kind != $entry.kind or .token != $entry.token)) + [$entry])))' "${inputs[@]}" >"$BP_EFFECTIVE_MAP"
 }
 
-# Emits action, target, note, architectures JSON, and source map, separated by
-# an ASCII unit separator so empty JSON fields are not collapsed by Bash read.
+# Emits action, target, JSON-encoded note, architectures JSON, and source map,
+# separated by an ASCII unit separator so empty JSON fields are not collapsed by
+# Bash read and multiline notes cannot split the record.
 bp_lookup_mapping() {
 	local kind="$1" token="$2" index map_file result
 	index=$((${#BP_MAP_FILES[@]} - 1))
 	while [ "$index" -ge 0 ]; do
 		map_file="${BP_MAP_FILES[$index]}"
-		result="$("$BP_JQ_BIN" -r --arg kind "$kind" --arg token "$token" '[.mappings[] | select(.kind == $kind and .token == $token)] | last | select(. != null) | [.action, (.target // ""), (.note // ""), (.architectures // [] | @json)] | join("\u001c")' "$map_file")"
+		result="$("$BP_JQ_BIN" -r --arg kind "$kind" --arg token "$token" '[.mappings[] | select(.kind == $kind and .token == $token)] | last | select(. != null) | [.action, (.target // ""), (.note // "" | @json), (.architectures // [] | @json)] | join("\u001c")' "$map_file")"
 		if [ -n "$result" ]; then
 			printf '%s\034%s\n' "$result" "$map_file"
 			return 0
@@ -57,6 +58,10 @@ bp_lookup_mapping() {
 		index=$((index - 1))
 	done
 	return 1
+}
+
+bp_decode_mapping_note() {
+	printf '%s\n' "$1" | "$BP_JQ_BIN" -r .
 }
 
 bp_mapping_fallback_path() {
@@ -82,6 +87,7 @@ bp_map_explain() {
 	IFS=$'\034' read -r action target note arches source <<EOF
 $row
 EOF
+	note="$(bp_decode_mapping_note "$note")"
 	bp_log "$kind $token: $action${target:+ -> $target}"
 	bp_log "Source: $source"
 	[ -n "$note" ] && bp_log "Rationale: $note"

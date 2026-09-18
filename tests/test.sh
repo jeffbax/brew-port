@@ -107,7 +107,8 @@ local_map="$map_dir/mappings.json"
 cat >"$local_map" <<'EOF'
 {"version":1,"mappings":[
  {"kind":"brew","token":"git","action":"skip","note":"local override"},
- {"kind":"brew","token":"root-tool","action":"fallback-root","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"local trusted test fallback"}
+ {"kind":"brew","token":"root-tool","action":"fallback-root","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"local trusted test fallback"},
+ {"kind":"brew","token":"multiline-tool","action":"fallback","target":"fallbacks/root-tool.sh","architectures":["arm64"],"note":"First line\nSecond line"}
 ]}
 EOF
 cat >"$map_dir/fallbacks/root-tool.sh" <<'EOF'
@@ -132,6 +133,13 @@ output="$("$utility" map explain brew duplicate-tool --map "$duplicate_map")"
 contains 'duplicate-tool: skip' "$output"
 contains 'last map entry' "$output"
 not_contains 'first map entry' "$output"
+
+multiline_brewfile="$tmp_dir/multiline.Brewfile"
+printf '%s\n' 'brew "multiline-tool"' >"$multiline_brewfile"
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run --map "$local_map" "$multiline_brewfile")"
+contains 'Would run reviewed fallback for multiline-tool: First line' "$output"
+contains 'Second line' "$output"
+not_contains 'No verified native fallback for arm64' "$output"
 
 root_brewfile="$tmp_dir/root.Brewfile"
 printf '%s\n' 'brew "git"' 'brew "root-tool"' >"$root_brewfile"
