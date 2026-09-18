@@ -20,7 +20,7 @@ source "$BP_BIN_DIR/lib/brew-port/reporting.bash"
 source "$BP_BIN_DIR/lib/brew-port/macports.bash"
 source "$BP_BIN_DIR/lib/brew-port/fallbacks.bash"
 
-BP_VERSION=0.1.0
+BP_VERSION=0.1.0-rc.1
 BP_DRY_RUN=false
 
 usage() {

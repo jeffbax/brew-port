@@ -4,6 +4,37 @@
 
 It reads `uname -m` on every invocation. Native `x86_64` and `arm64` are equally supported when MacPorts and the requested package are available. A fallback runs only when its map declares support for the live native architecture. Intel-only fallbacks are unresolved on Apple Silicon: brew-port never invokes Rosetta or silently substitutes a different port.
 
+## Install
+
+Choose a published release version and download its archive with GitHub CLI. Private repositories require an authenticated account with repository access.
+
+```sh
+version='X.Y.Z' # Replace with the release version, without the leading v.
+mkdir brew-port-download
+cd brew-port-download
+gh release download "v$version" --repo jeffbax/brew-port \
+  --pattern "brew-port-$version.tar.gz" --pattern SHA256SUMS &&
+gh release verify "v$version" --repo jeffbax/brew-port &&
+gh release verify-asset "v$version" "brew-port-$version.tar.gz" --repo jeffbax/brew-port &&
+shasum -a 256 -c SHA256SUMS &&
+tar -xzf "brew-port-$version.tar.gz"
+```
+
+After verification and extraction succeed, inspect and run the local installer:
+
+```sh
+less "brew-port-$version/install.sh"
+bash "brew-port-$version/install.sh"
+```
+
+Stop if any verification fails. Release verification requires a GitHub CLI version supporting `release verify` and `release verify-asset`; checksums alone detect corruption, not publisher authenticity. Download and inspect the installer before executing it.
+
+The default prefix is `~/.local`; use `bash install.sh --prefix '/path/to/prefix'` for another location. Installation is offline, uses no sudo, and requires no MacPorts or jq. It does not edit shell configuration. Add the prefix's `bin` directory to PATH yourself if necessary.
+
+The complete runtime lives in `PREFIX/lib/brew-port/versions/VERSION`, with a `current` symlink and an executable symlink in `PREFIX/bin`. Installing a new pinned release switches `current` and retains older versions. Reinstalling the original verified archive rolls back to that version. An existing version with modified contents or an unrelated executable is never overwritten. User mappings and managed-fallback inventory remain outside the installation.
+
+`brew-port update` updates MacPorts packages and managed fallbacks; upgrade the CLI by installing another release archive. Optional completions are installed separately with `brew-port completion install SHELL`.
+
 ## Use
 
 Install MacPorts for the current macOS release first. brew-port searches `/opt/local/bin/port` first, then `port` on `PATH`; set `BREW_PORT_PORT_BIN=/path/to/port` for a non-default prefix. Host facts are detected, never persisted.
@@ -45,7 +76,13 @@ Install `shfmt` (for example, `sudo port install shfmt`), then run:
 
 ```sh
 shfmt -ln bash -w bin/brew-port bin/lib/brew-port/*.bash maps/fallbacks/*.sh completions/brew-port.bash tests/test.sh
+shfmt -ln bash -w install.sh scripts/*.sh tests/release.sh
 tests/test.sh
+bash tests/release.sh
 ```
 
 The test suite enforces `shfmt -d`, Bash syntax checks, and ShellCheck.
+
+## Releases
+
+See [the release checklist](docs/releases.md) for versioning, testing, packaging, and publication. Release-specific test results and known issues belong in GitHub Release notes.
