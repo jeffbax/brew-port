@@ -31,15 +31,28 @@ mock_mas="$tmp_dir/mas"
 sudo_log="$tmp_dir/sudo.log"
 jq_log="$tmp_dir/jq.log"
 mas_log="$tmp_dir/mas.log"
+active_ports="$tmp_dir/active-ports"
+mas_installed="$tmp_dir/mas-installed"
+: >"$active_ports"
+: >"$mas_installed"
+export MOCK_ACTIVE_PORTS="$active_ports"
+export MOCK_MAS_INSTALLED="$mas_installed"
 cat >"$mock_uname" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in -s) echo Darwin ;; -m) echo "${MOCK_ARCH:?}" ;; *) exit 2 ;; esac
 EOF
 cat >"$mock_port" <<'EOF'
 #!/usr/bin/env bash
+if [ "$1 ${2:-} ${3:-}" = '-q echo active' ]; then
+	cat "${MOCK_ACTIVE_PORTS:?}"
+	exit 0
+fi
 case "$1" in
 version) exit 0 ;;
-install) echo "port $*"; [ "${MOCK_PORT_FAIL_TARGET:-}" != "$2" ] ;;
+install)
+	echo "port $*"
+	for target in "${@:2}"; do [ "${MOCK_PORT_FAIL_TARGET:-}" != "$target" ] || exit 1; done
+	;;
 selfupdate|select|upgrade) echo "port $*" ;;
 *) exit 2 ;;
 esac
@@ -57,7 +70,25 @@ EOF
 chmod +x "$mock_sysctl"
 cat >"$mock_mas" <<'EOF'
 #!/usr/bin/env bash
-case "$1" in install) printf '%s\n' "$*" >>"${MAS_LOG:?}" ;; *) exit 2 ;; esac
+command="$1"
+shift
+[ "${MOCK_MAS_HANG_COMMAND:-}" != "$command" ] || sleep 5
+case "$command" in
+list)
+	for id in "$@"; do grep -Fxq -- "$id" "${MOCK_MAS_INSTALLED:?}" && printf '%s Mock App (1.0)\n' "$id"; done
+	true
+	;;
+lookup)
+	[ "${1:-}" = --json ] && shift
+	for id in "$@"; do [ "${MOCK_MAS_INVALID:-}" = "$id" ] || printf '{"id":%s}\n' "$id"; done
+	;;
+install)
+	[ "${MOCK_MAS_FAIL_INSTALL:-0}" != 1 ] || { echo 'mock MAS install failed' >&2; exit 1; }
+	printf 'install %s\n' "$*" >>"${MAS_LOG:?}"
+	printf '%s\n' "$@" >>"${MOCK_MAS_INSTALLED:?}"
+	;;
+*) exit 2 ;;
+esac
 EOF
 chmod +x "$mock_mas"
 
@@ -104,14 +135,12 @@ printf '%s\n' \
 : >"$sudo_log"
 output="$(MOCK_ARCH=x86_64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$brewfile")"
 contains "Would run: sudo $mock_port selfupdate" "$output"
-contains 'Would install MacPorts port git (for git)' "$output"
-contains 'Would install MacPorts port skhd (for asmvik/formulae/skhd)' "$output"
-contains 'Would install MacPorts port 1password-cli (for 1password-cli)' "$output"
+contains 'Would install MacPorts ports: git skhd 1password-cli' "$output"
 contains 'Would run reviewed fallback for csvkit' "$output"
 contains 'Would run reviewed fallback for mas' "$output"
 contains 'Would run reviewed fallback for rtk' "$output"
 contains 'Would run reviewed fallback for signal-cli' "$output"
-contains 'Install cask firefox manually' "$output"
+contains 'Install cask firefox manually.' "$output"
 [ ! -s "$sudo_log" ] || fail 'Dry run used sudo.'
 
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$brewfile")"
@@ -133,10 +162,8 @@ grep -Fqx -- "-n $mock_port select --set csvkit py313-csvkit" "$sudo_log" || fai
 ruby_forms_brewfile="$tmp_dir/ruby-forms.Brewfile"
 printf '%s\n' "brew 'git'" 'brew("asmvik/formulae/skhd")' "cask '1password-cli'" 'cask("firefox")' >"$ruby_forms_brewfile"
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$ruby_forms_brewfile")"
-contains 'Would install MacPorts port git (for git)' "$output"
-contains 'Would install MacPorts port skhd (for asmvik/formulae/skhd)' "$output"
-contains 'Would install MacPorts port 1password-cli (for 1password-cli)' "$output"
-contains 'Install cask firefox manually' "$output"
+contains 'Would install MacPorts ports: git skhd 1password-cli' "$output"
+contains 'Install cask firefox manually.' "$output"
 
 conditional_brewfile="$tmp_dir/conditional.Brewfile"
 printf '%s\n' 'brew "signal-cli" if Hardware::CPU.intel?' 'if Hardware::CPU.intel?' '  brew "rtk"' 'end' >"$conditional_brewfile"
@@ -150,28 +177,82 @@ escaped_quote_brewfile="$tmp_dir/escaped-quote.Brewfile"
 printf '%s\n' 'brew "git", args: ["foo\"#bar"] if false' >"$escaped_quote_brewfile"
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$escaped_quote_brewfile")"
 contains 'brew git: Conditional Brewfile declaration is unsupported.' "$output"
-not_contains 'Would install MacPorts port git (for git)' "$output"
+not_contains 'Would install MacPorts ports: git' "$output"
 
 commented_brewfile="$tmp_dir/commented.Brewfile"
 printf '%s\n' 'brew "git" # if needed' >"$commented_brewfile"
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$commented_brewfile")"
-contains 'Would install MacPorts port git (for git)' "$output"
+contains 'Would install MacPorts ports: git' "$output"
 not_contains 'Conditional Brewfile declaration is unsupported.' "$output"
 
 cask_only_brewfile="$tmp_dir/cask-only.Brewfile"
 printf '%s\n' 'cask "firefox"' >"$cask_only_brewfile"
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$cask_only_brewfile")"
-contains 'Install cask firefox manually' "$output"
+contains 'Install cask firefox manually.' "$output"
+
+manual_map="$tmp_dir/manual-map.json"
+manual_present="$tmp_dir/Present App.app"
+mkdir "$manual_present"
+jq -n --arg present "$manual_present" --arg missing "$tmp_dir/Missing App.app" '{version:1,mappings:[
+  {kind:"cask",token:"present-app",action:"manual",detect:[$present]},
+  {kind:"cask",token:"missing-app",action:"manual",detect:[$missing]}
+]}' >"$manual_map"
+manual_brewfile="$tmp_dir/manual.Brewfile"
+printf '%s\n' 'cask "present-app"' 'cask "missing-app"' >"$manual_brewfile"
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run --map "$manual_map" "$manual_brewfile")"
+contains 'Already present: 1' "$output"
+contains 'Install cask missing-app manually.' "$output"
+not_contains 'Install cask present-app manually.' "$output"
 
 empty_brewfile="$tmp_dir/empty.Brewfile"
 : >"$empty_brewfile"
 MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$empty_brewfile" >/dev/null
+
+already_active_brewfile="$tmp_dir/already-active.Brewfile"
+duplicate_active_brewfile="$tmp_dir/duplicate-active.Brewfile"
+printf '%s\n' 'brew "git"' >"$already_active_brewfile"
+printf '%s\n' 'brew "git"' >"$duplicate_active_brewfile"
+printf '%s\n' git >"$active_ports"
+: >"$sudo_log"
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$already_active_brewfile" "$duplicate_active_brewfile")"
+contains 'Already present: 1' "$output"
+contains 'Installed: 0' "$output"
+[ ! -s "$sudo_log" ] || fail 'An already-satisfied plan used sudo.'
+
+batch_brewfile="$tmp_dir/batch.Brewfile"
+printf '%s\n' 'brew "git"' 'brew "tree"' >"$batch_brewfile"
+: >"$active_ports"
+: >"$sudo_log"
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$batch_brewfile")"
+contains 'Installing MacPorts ports: git tree' "$output"
+contains 'Installed: 2' "$output"
+[ "$(grep -Fxc -- "-n $mock_port install git tree" "$sudo_log")" -eq 1 ] || fail 'Missing ports were not installed in one batch.'
+: >"$active_ports"
 
 mas_brewfile="$tmp_dir/mas.Brewfile"
 printf '%s\n' 'mas "Tom'"'"'s App", id: 12345' >"$mas_brewfile"
 : >"$mas_log"
 PATH="$tmp_dir:$PATH" MAS_LOG="$mas_log" MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$mas_brewfile" >/dev/null
 grep -Fqx 'install 12345' "$mas_log" || fail 'MAS installation was gated on the obsolete account subcommand.'
+
+mixed_mas_brewfile="$tmp_dir/mixed-mas.Brewfile"
+printf '%s\n' 'mas "Valid App", id: 11111' 'mas "Invalid App", id: 99999' >"$mixed_mas_brewfile"
+: >"$mas_installed"
+: >"$mas_log"
+if output="$(PATH="$tmp_dir:$PATH" MAS_LOG="$mas_log" MOCK_MAS_INVALID=99999 MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$mixed_mas_brewfile" 2>&1)"; then fail 'An invalid MAS ID did not fail reconciliation.'; fi
+contains 'Invalid App (99999): Mac App Store ID is unavailable.' "$output"
+contains 'Result: failed' "$output"
+grep -Fqx 'install 11111' "$mas_log" || fail 'The valid MAS ID was not installed in the batch.'
+not_contains '99999' "$(cat "$mas_log")"
+
+timeout_mas_brewfile="$tmp_dir/timeout-mas.Brewfile"
+printf '%s\n' 'mas "Slow App", id: 22222' >"$timeout_mas_brewfile"
+: >"$mas_installed"
+: >"$mas_log"
+output="$(PATH="$tmp_dir:$PATH" MAS_LOG="$mas_log" MOCK_MAS_HANG_COMMAND=install BREW_PORT_MAS_TIMEOUT=1 MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$timeout_mas_brewfile")"
+contains 'Batch install timed out after 1s; returning success to the caller.' "$output"
+contains 'Result: success with warnings' "$output"
+[ ! -s "$mas_log" ] || fail 'A timed-out MAS batch fell back to one-by-one installation.'
 
 bad_map="$tmp_dir/bad.json"
 printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"bad","action":"fallback","target":"../escape.sh","architectures":["arm64"]}]}' >"$bad_map"
@@ -203,7 +284,23 @@ cat >"$map_dir/fallbacks/install-test-mas.sh" <<'EOF'
 #!/usr/bin/env bash
 cat >"$BREW_PORT_TEST_MAS_BIN/mas" <<'MAS'
 #!/usr/bin/env bash
-case "$1" in install) printf '%s\n' "$*" >>"$MAS_LOG" ;; *) exit 2 ;; esac
+command="$1"
+shift
+case "$command" in
+list)
+	for id in "$@"; do grep -Fxq -- "$id" "$MOCK_MAS_INSTALLED" && printf '%s Mock App (1.0)\n' "$id"; done
+	true
+	;;
+lookup)
+	[ "${1:-}" = --json ] && shift
+	for id in "$@"; do printf '{"id":%s}\n' "$id"; done
+	;;
+install)
+	printf 'install %s\n' "$*" >>"$MAS_LOG"
+	printf '%s\n' "$@" >>"$MOCK_MAS_INSTALLED"
+	;;
+*) exit 2 ;;
+esac
 MAS
 chmod +x "$BREW_PORT_TEST_MAS_BIN/mas"
 EOF
@@ -250,9 +347,10 @@ not_contains 'No verified native fallback for arm64' "$output"
 
 escaped_brewfile="$tmp_dir/escaped.Brewfile"
 printf '%s\n' 'brew "escaped-tool"' >"$escaped_brewfile"
-output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run --map "$local_map" "$escaped_brewfile")"
+if output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run --map "$local_map" "$escaped_brewfile" 2>&1)"; then fail 'Escaped fallback unexpectedly succeeded.'; fi
 contains 'Fallback target escapes the map fallbacks directory: fallbacks/escaped-tool.sh' "$output"
 not_contains 'Would run reviewed fallback for escaped-tool' "$output"
+contains 'Result: failed' "$output"
 
 failing_brewfile="$tmp_dir/failing.Brewfile"
 printf '%s\n' 'brew "failing-port"' 'brew "failing-fallback"' >"$failing_brewfile"

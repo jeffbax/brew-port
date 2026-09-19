@@ -103,7 +103,7 @@ mkdir "$tmp_dir/mocks"
 # shellcheck disable=SC2016
 printf '%s\n' '#!/bin/bash' 'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac' >"$tmp_dir/mocks/uname"
 # shellcheck disable=SC2016
-printf '%s\n' '#!/bin/bash' '[ "$1" = version ] || exit 99' >"$tmp_dir/mocks/port"
+printf '%s\n' '#!/bin/bash' 'if [ "$1" = version ]; then exit 0; fi' 'if [ "$1 ${2:-} ${3:-}" = "-q echo active" ]; then exit 0; fi' 'exit 99' >"$tmp_dir/mocks/port"
 printf '%s\n' '#!/bin/bash' 'exit 99' >"$tmp_dir/mocks/sudo"
 chmod +x "$tmp_dir/mocks/"*
 printf '%s\n' 'brew "git"' >"$tmp_dir/Brewfile"

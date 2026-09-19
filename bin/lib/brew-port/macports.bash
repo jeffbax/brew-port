@@ -52,3 +52,45 @@ bp_install_port() {
 	bp_log "Installing MacPorts port $target (for $token)"
 	bp_port install "$target" || bp_action_failed "$token" "MacPorts install failed: $target"
 }
+
+bp_snapshot_active_ports() {
+	BP_ACTIVE_PORTS="$BP_TMP_DIR/active-ports"
+	"$BP_PORT_BIN" -q echo active >"$BP_ACTIVE_PORTS" || bp_die 'Could not inspect active MacPorts ports.'
+}
+
+bp_port_is_active() {
+	grep -Fxq -- "$1" "$BP_ACTIVE_PORTS"
+}
+
+bp_install_port_plan() {
+	local plan="$1" missing="$BP_TMP_DIR/missing-ports" targets="$BP_TMP_DIR/missing-port-targets"
+	local token target batch_failed=false
+	: >"$missing"
+	while IFS=$'\t' read -r token target; do
+		if bp_port_is_active "$target"; then
+			bp_present port
+		else
+			printf '%s\t%s\n' "$token" "$target" >>"$missing"
+		fi
+	done <"$plan"
+	[ -s "$missing" ] || return 0
+	awk -F '\t' '!seen[$2]++ { print $2 }' "$missing" >"$targets"
+	if "$BP_DRY_RUN"; then
+		bp_log "Would install MacPorts ports: $(paste -sd ' ' "$targets")"
+		return 0
+	fi
+	bp_selfupdate
+	local -a target_args=()
+	while IFS= read -r target; do target_args+=("$target"); done <"$targets"
+	bp_start_sudo
+	bp_log "Installing MacPorts ports: ${target_args[*]}"
+	bp_port install "${target_args[@]}" || batch_failed=true
+	if "$batch_failed"; then bp_snapshot_active_ports; fi
+	while IFS=$'\t' read -r token target; do
+		if ! "$batch_failed" || bp_port_is_active "$target"; then
+			if [ "$token" = "$target" ]; then bp_installed "$token"; else bp_installed "$token -> $target"; fi
+		else
+			bp_action_failed "$token" "MacPorts install failed: $target"
+		fi
+	done <"$missing"
+}

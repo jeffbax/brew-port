@@ -19,12 +19,17 @@ bp_validate_map_file() {
       (type == "object") and
       (.kind | IN("brew", "cask")) and
       (.token | type == "string" and length > 0) and
-      (.action | IN("port", "skip", "fallback", "fallback-root")) and
+      (.action | IN("port", "skip", "fallback", "fallback-root", "manual")) and
       ((.note // "") | type == "string") and
       (if .action == "port" then (.target | type == "string" and length > 0)
        elif .action == "skip" then ((.target // null) == null)
+       elif .action == "manual" then
+         (.kind == "cask" and (.target // null) == null and
+          (.detect | type == "array" and length > 0 and
+           all(.[]; type == "string" and test("^(~/|/)"))))
        else ((.target | type == "string" and test("^fallbacks/[A-Za-z0-9._/-]+\\.sh$") and (contains("../") | not)) and
              (.architectures | type == "array" and length > 0 and all(.[]; IN("x86_64", "arm64")))) end) and
+      ((.detect? == null) or .action == "manual") and
       ((.architectures? == null) or (.architectures | type == "array" and all(.[]; type == "string"))))
   ' "$map_file" >/dev/null 2>&1 || bp_die "Invalid mapping file: $map_file"
 }
@@ -50,7 +55,7 @@ bp_lookup_mapping() {
 	index=$((${#BP_MAP_FILES[@]} - 1))
 	while [ "$index" -ge 0 ]; do
 		map_file="${BP_MAP_FILES[$index]}"
-		result="$("$BP_JQ_BIN" -r --arg kind "$kind" --arg token "$token" '[.mappings[] | select(.kind == $kind and .token == $token)] | last | select(. != null) | [.action, (.target // ""), (.note // "" | @json), (.architectures // [] | @json)] | join("\u001c")' "$map_file")"
+		result="$("$BP_JQ_BIN" -r --arg kind "$kind" --arg token "$token" '[.mappings[] | select(.kind == $kind and .token == $token)] | last | select(. != null) | [.action, (.target // ""), (.note // "" | @json), (.architectures // [] | @json), (.detect // [] | @json)] | join("\u001c")' "$map_file")"
 		if [ -n "$result" ]; then
 			printf '%s\034%s\n' "$result" "$map_file"
 			return 0
@@ -98,13 +103,13 @@ EOF
 }
 
 bp_map_explain() {
-	local kind="$1" token="$2" row action target note arches source
+	local kind="$1" token="$2" row action target note arches detect source
 	row="$(bp_lookup_mapping "$kind" "$token" || true)"
 	if [ -z "$row" ]; then
 		bp_log "$kind $token: no explicit mapping; brew defaults to the same-named MacPorts port."
 		return 0
 	fi
-	IFS=$'\034' read -r action target note arches source <<EOF
+	IFS=$'\034' read -r action target note arches detect source <<EOF
 $row
 EOF
 	note="$(bp_decode_mapping_note "$note")"
@@ -112,5 +117,6 @@ EOF
 	bp_log "Source: $source"
 	[ -n "$note" ] && bp_log "Rationale: $note"
 	[ "$arches" != '[]' ] && bp_log "Native architectures: $arches"
+	[ "$detect" != '[]' ] && bp_log "Detected by any path: $detect"
 	return 0
 }

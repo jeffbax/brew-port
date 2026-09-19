@@ -56,13 +56,15 @@ bin/brew-port map validate --map ./my-mappings.json
 bin/brew-port map explain brew rtk
 ```
 
-`--dry-run` makes no downloads, package installs, sudo calls, or writes. Normal `install` selfupdates before ports. `update` additionally runs `port upgrade outdated`.
+`install` parses and deduplicates all Brewfiles first, scans active ports once, and installs missing direct ports in one batch. Reviewed fallbacks remain package-specific. The final reconciliation summary separates already-present, installed, manual, warning, and failed items. `--dry-run` makes no downloads, package installs, sudo calls, or writes. `update` additionally runs `port upgrade outdated`.
 
 ## JSON mappings
 
 Maps layer as bundled `maps/default.json`, `${XDG_CONFIG_HOME:-~/.config}/brew-port/mappings.json`, then repeated `--map FILE` arguments from left to right. Later entries with the same `kind` and `token` replace earlier ones. The independently authored [schema](maps/mappings.schema.json) defines the format. `brew-port map init` creates a user file and its adjacent `fallbacks/` directory.
 
-Actions are `port`, `skip`, `fallback`, and `fallback-root`. Fallback script targets must remain below the mapping file’s `fallbacks/` directory. `fallback-root` is explicitly user-trusted code that may reuse the active sudo lease; review every URL, checksum, destination, and privileged command.
+Actions are `port`, `skip`, `fallback`, `fallback-root`, and cask-only `manual`. A `manual` mapping declares literal absolute or `~/` detection paths; an existing path satisfies the cask, otherwise it appears in manual follow-up. Fallback script targets must remain below the mapping file’s `fallbacks/` directory. `fallback-root` is explicitly user-trusted code that may reuse the active sudo lease; review every URL, checksum, destination, and privileged command.
+
+Mac App Store declarations are scanned, validated, and installed in batches. Explicitly invalid IDs and completed installation failures fail reconciliation. A hung or timed-out MAS operation is reported as a warning so the caller can continue; brew-port does not retry IDs one by one. MAS operations default to a 30-second timeout, configurable with `BREW_PORT_MAS_TIMEOUT`.
 
 Fallback maps declare their verified architectures and bundled installers choose matching release assets. MAS uses its matching arm64 or x86_64 package. signal-cli uses its official bundle (which contains matching macOS libsignal slices) and installs MacPorts OpenJDK 25 under the active sudo lease.
 

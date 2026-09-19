@@ -21,9 +21,15 @@
       "properties": {
         "kind": { "enum": ["brew", "cask"] },
         "token": { "type": "string", "minLength": 1 },
-        "action": { "enum": ["port", "skip", "fallback", "fallback-root"] },
+        "action": { "enum": ["port", "skip", "fallback", "fallback-root", "manual"] },
         "target": { "type": "string" },
         "note": { "type": "string" },
+        "detect": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^(~/|/)" }
+        },
         "architectures": {
           "type": "array",
           "minItems": 1,
@@ -45,6 +51,15 @@
             "required": ["target", "architectures"],
             "properties": { "target": { "pattern": "^fallbacks/(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+\\.sh$" } }
           }
+        },
+        {
+          "if": { "properties": { "action": { "const": "manual" } } },
+          "then": {
+            "required": ["detect"],
+            "properties": { "kind": { "const": "cask" } },
+            "not": { "required": ["target"] }
+          },
+          "else": { "not": { "required": ["detect"] } }
         }
       ]
     }
