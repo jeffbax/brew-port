@@ -6,6 +6,11 @@ on:
   pull_request:
 permissions:
   contents: read
+
+concurrency:
+  group: checks-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     timeout-minutes: 45
@@ -36,9 +41,13 @@ jobs:
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
       - name: System Bash 3.2
-        run: /bin/bash tests/test.sh && /bin/bash tests/release.sh
+        run: |
+          /bin/bash tests/bump-version.sh
+          /bin/bash tests/test.sh
+          /bin/bash tests/release.sh
       - name: Current Bash
         run: |
+          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/bump-version.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/test.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release.sh
       - name: Real Brewfile installation

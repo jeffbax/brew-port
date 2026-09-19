@@ -23,6 +23,61 @@ version="$("$repo_dir/bin/brew-port" version)"
 version="${version#brew-port }"
 bash "$repo_dir/scripts/package-release.sh" "$tmp_dir/download" >/dev/null
 (cd "$tmp_dir/download" && shasum -a 256 -c SHA256SUMS >/dev/null)
+mkdir "$tmp_dir/bootstrap" "$tmp_dir/bootstrap-bin"
+cp "$repo_dir/install.sh" "$tmp_dir/bootstrap/install.sh"
+chmod +x "$tmp_dir/bootstrap/install.sh"
+cat >"$tmp_dir/bootstrap-bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${MOCK_CURL_FAIL:-0}" = 1 ] && exit 22
+output=''
+url=''
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-o)
+		output="$2"
+		shift 2
+		;;
+	*)
+		url="$1"
+		shift
+		;;
+	esac
+done
+[ -n "$output" ] || exit 2
+case "$url" in
+*/SHA256SUMS) cp "$MOCK_MANIFEST" "$output" ;;
+*/brew-port-*.tar.gz) cp "$MOCK_ARCHIVE" "$output" ;;
+*) exit 2 ;;
+esac
+EOF
+chmod +x "$tmp_dir/bootstrap-bin/curl"
+bootstrap_prefix="$tmp_dir/bootstrap prefix"
+PATH="$tmp_dir/bootstrap-bin:$PATH" MOCK_MANIFEST="$tmp_dir/download/SHA256SUMS" MOCK_ARCHIVE="$tmp_dir/download/brew-port-$version.tar.gz" bash "$tmp_dir/bootstrap/install.sh" --prefix "$bootstrap_prefix" >/dev/null
+[ "$("$bootstrap_prefix/bin/brew-port" version)" = "brew-port $version" ] || fail 'Bootstrap installer did not forward --prefix.'
+mkdir "$tmp_dir/piped-bootstrap"
+cp "$tmp_dir/download/SHA256SUMS" "$tmp_dir/piped-bootstrap/SHA256SUMS"
+piped_prefix="$tmp_dir/piped bootstrap prefix"
+(
+	cd "$tmp_dir/piped-bootstrap"
+	PATH="$tmp_dir/bootstrap-bin:$PATH" MOCK_MANIFEST="$tmp_dir/download/SHA256SUMS" MOCK_ARCHIVE="$tmp_dir/download/brew-port-$version.tar.gz" bash -s -- --prefix "$piped_prefix" <"$tmp_dir/bootstrap/install.sh" >/dev/null
+)
+[ "$("$piped_prefix/bin/brew-port" version)" = "brew-port $version" ] || fail 'Piped bootstrap treated its caller directory as a release.'
+printf '%s\n' 'not a checksum manifest' >"$tmp_dir/bad-manifest"
+if PATH="$tmp_dir/bootstrap-bin:$PATH" MOCK_MANIFEST="$tmp_dir/bad-manifest" MOCK_ARCHIVE="$tmp_dir/download/brew-port-$version.tar.gz" bash "$tmp_dir/bootstrap/install.sh" --prefix "$tmp_dir/malformed" >/dev/null 2>&1; then
+	fail 'Malformed bootstrap manifest was accepted.'
+fi
+[ ! -e "$tmp_dir/malformed" ] || fail 'Malformed bootstrap manifest wrote to the installation prefix.'
+cp "$tmp_dir/download/brew-port-$version.tar.gz" "$tmp_dir/corrupt-download.tar.gz"
+printf '\ncorrupt\n' >>"$tmp_dir/corrupt-download.tar.gz"
+if PATH="$tmp_dir/bootstrap-bin:$PATH" MOCK_MANIFEST="$tmp_dir/download/SHA256SUMS" MOCK_ARCHIVE="$tmp_dir/corrupt-download.tar.gz" bash "$tmp_dir/bootstrap/install.sh" --prefix "$tmp_dir/checksum-failure" >/dev/null 2>&1; then
+	fail 'Bootstrap checksum failure was accepted.'
+fi
+[ ! -e "$tmp_dir/checksum-failure" ] || fail 'Checksum failure wrote to the installation prefix.'
+if PATH="$tmp_dir/bootstrap-bin:$PATH" MOCK_CURL_FAIL=1 MOCK_MANIFEST="$tmp_dir/download/SHA256SUMS" MOCK_ARCHIVE="$tmp_dir/download/brew-port-$version.tar.gz" bash "$tmp_dir/bootstrap/install.sh" --prefix "$tmp_dir/download-failure" >/dev/null 2>&1; then
+	fail 'Bootstrap download failure was accepted.'
+fi
+[ ! -e "$tmp_dir/download-failure" ] || fail 'Download failure wrote to the installation prefix.'
 mkdir "$tmp_dir/extracted"
 tar -xzf "$tmp_dir/download/brew-port-$version.tar.gz" -C "$tmp_dir/extracted"
 release_dir="$tmp_dir/extracted/brew-port-$version"
@@ -88,7 +143,7 @@ if bash "$release_dir/install.sh" --prefix "$tmp_dir/corrupt" >/dev/null 2>&1; t
 printf '\ncorrupt\n' >>"$tmp_dir/download/brew-port-$version.tar.gz"
 if (cd "$tmp_dir/download" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1); then fail 'Corrupt download passed verification.'; fi
 if RELEASE_TAG=v9.9.9 bash "$repo_dir/scripts/package-release.sh" "$tmp_dir/wrong-tag" >/dev/null 2>&1; then fail 'Mismatched tag was accepted.'; fi
-for file in install.sh scripts/package-release.sh tests/release.sh; do /bin/bash -n "$repo_dir/$file"; done
-shfmt -ln bash -d "$repo_dir/install.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/tests/release.sh"
-shellcheck -s bash "$repo_dir/install.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/tests/release.sh"
+for file in install.sh scripts/bump-version.sh scripts/package-release.sh tests/bump-version.sh tests/release.sh; do /bin/bash -n "$repo_dir/$file"; done
+shfmt -ln bash -d "$repo_dir/install.sh" "$repo_dir/scripts/bump-version.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/tests/bump-version.sh" "$repo_dir/tests/release.sh"
+shellcheck -s bash "$repo_dir/install.sh" "$repo_dir/scripts/bump-version.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/tests/bump-version.sh" "$repo_dir/tests/release.sh"
 printf '%s\n' 'Release installation checks passed.'

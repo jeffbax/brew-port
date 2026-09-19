@@ -6,30 +6,35 @@ It reads `uname -m` on every invocation. Native `x86_64` and `arm64` are equally
 
 ## Install
 
-Choose a published release version and download its archive with GitHub CLI. Private repositories require an authenticated account with repository access.
+Install the latest published stable release directly:
+
+```sh
+curl -fsSL https://github.com/jeffbax/brew-port/releases/latest/download/install.sh \
+  | bash -s --
+```
+
+The bootstrap downloads the latest release manifest and archive, verifies the archive's SHA-256 checksum, extracts it, and runs the packaged offline installer. `latest` means the latest published stable release; prereleases are excluded. The default prefix is `~/.local`; pass installer arguments after `--`:
+
+```sh
+curl -fsSL https://github.com/jeffbax/brew-port/releases/latest/download/install.sh \
+  | bash -s -- --prefix "$HOME/.local"
+```
+
+To download and inspect before executing, choose a release version and verify its archive:
 
 ```sh
 version='X.Y.Z' # Replace with the release version, without the leading v.
 mkdir brew-port-download
 cd brew-port-download
-gh release download "v$version" --repo jeffbax/brew-port \
-  --pattern "brew-port-$version.tar.gz" --pattern SHA256SUMS &&
-gh release verify "v$version" --repo jeffbax/brew-port &&
-gh release verify-asset "v$version" "brew-port-$version.tar.gz" --repo jeffbax/brew-port &&
-shasum -a 256 -c SHA256SUMS &&
+curl -fsSLO "https://github.com/jeffbax/brew-port/releases/download/v$version/brew-port-$version.tar.gz"
+curl -fsSLO https://github.com/jeffbax/brew-port/releases/download/v$version/SHA256SUMS
+shasum -a 256 -c SHA256SUMS
 tar -xzf "brew-port-$version.tar.gz"
-```
-
-After verification and extraction succeed, inspect and run the local installer:
-
-```sh
 less "brew-port-$version/install.sh"
-bash "brew-port-$version/install.sh"
+bash "brew-port-$version/install.sh" --prefix '/path/to/prefix'
 ```
 
-Stop if any verification fails. Release verification requires a GitHub CLI version supporting `release verify` and `release verify-asset`; checksums alone detect corruption, not publisher authenticity. Download and inspect the installer before executing it.
-
-The default prefix is `~/.local`; use `bash install.sh --prefix '/path/to/prefix'` for another location. Installation is offline, uses no sudo, and requires no MacPorts or jq. It does not edit shell configuration. Add the prefix's `bin` directory to PATH yourself if necessary.
+Installation is offline after the archive is downloaded, uses no sudo, and requires no MacPorts or jq. It does not edit shell configuration. Add the prefix's `bin` directory to PATH yourself if necessary. GitHub CLI release and asset attestation verification is stronger than checksums alone when available.
 
 The complete runtime lives in `PREFIX/lib/brew-port/versions/VERSION`, with a `current` symlink and an executable symlink in `PREFIX/bin`. Installing a new pinned release switches `current` and retains older versions. Reinstalling the original verified archive rolls back to that version. An existing version with modified contents or an unrelated executable is never overwritten. User mappings and managed-fallback inventory remain outside the installation.
 
@@ -76,8 +81,9 @@ Install `shfmt` (for example, `sudo port install shfmt`), then run:
 
 ```sh
 shfmt -ln bash -w bin/brew-port bin/lib/brew-port/*.bash maps/fallbacks/*.sh completions/brew-port.bash tests/test.sh
-shfmt -ln bash -w install.sh scripts/*.sh tests/release.sh
+shfmt -ln bash -w install.sh scripts/*.sh tests/bump-version.sh tests/release.sh
 shfmt -ln bash -w tests/integration.sh
+tests/bump-version.sh
 tests/test.sh
 bash tests/release.sh
 ```

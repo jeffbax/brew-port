@@ -1,20 +1,51 @@
 # Release checklist
 
-Tags use semver (`vMAJOR.MINOR.PATCH`, optionally with a prerelease suffix) and must match `BP_VERSION` in the CLI. One source/runtime archive supports both native Intel and Apple Silicon.
+Releases use semver (`vMAJOR.MINOR.PATCH`, optionally with `-IDENTIFIER.NUMBER`) and must match `BP_VERSION` in the CLI. One source/runtime archive supports both native Intel and Apple Silicon.
 
-## Prepare and package
+## Start a release
 
-1. Set the CLI version and review the changes on a clean checkout.
-2. Run `/bin/bash tests/test.sh` and `/bin/bash tests/release.sh`, then both suites with current Bash. The installation suite packages into a temporary directory and installs outside the checkout.
-3. Run `RELEASE_TAG=vVERSION bash scripts/package-release.sh`, replacing `VERSION` with the CLI version. This creates `dist/brew-port-VERSION.tar.gz` and `dist/SHA256SUMS`. The archive contains its own file checksums, installer, CLI modules, maps, fallbacks, completions, agent skill, README, and license. Generated archives and checksums stay in ignored `dist/` or temporary directories.
-4. Commit and push the reviewed changes, then push the matching tag. CI and the draft-release workflow run both suites under system Bash 3.2 and current Bash on macOS 15 and 26, using native ARM64 (`macos-15`, `macos-26`) and Intel (`macos-15-intel`, `macos-26-intel`) runners. All four combinations must pass before the release job uploads the explicitly packaged archive and checksums. It fails on an existing release rather than silently replacing assets.
+1. Merge the intended changes into the default branch.
+2. Open the **Release** workflow and choose `patch`, `minor`, `major`, or `prerelease` from the **Run workflow** dropdown.
+3. The workflow computes the next version with `scripts/bump-version.sh`, changes only the `BP_VERSION` assignment, commits it as `github-actions[bot]` with `[skip ci]`, and pushes that commit to the default branch.
+4. The exact commit SHA then runs the full native matrix on macOS 15 and 26, ARM64 and Intel. Each runner executes the version helper checks, the general tests, the packaged-release tests, and the real Brewfile integration test under system Bash 3.2 and current MacPorts Bash.
 
-## Verify and publish
+The version bump commit remains on the default branch if checks fail. Fix the issue, then run the same dropdown choice again. A rerun recognizes the existing computed bump and reuses its version instead of creating another bump commit. Release runs are serialized and are never cancelled.
 
-Enable repository release immutability before publishing. Upload all assets while the release is a draft; published assets and their tag are locked, and GitHub generates a release attestation. See [GitHub's immutable-release guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+The CI workflow uses a branch-aware concurrency key. A newer push cancels older checks for the same branch; pull requests use the head repository and head branch so forks do not collide.
 
-Download the draft assets with an authenticated repository account and verify SHA-256 checksums before extraction. Inspect the installer and install into a temporary prefix. Check `version`, `doctor`, mapping validation, dry-run translation, completion installation, upgrade, and rollback. Release attestation verification becomes available after publication.
+## Packaging and publication
 
-CI runs a real installation smoke test on all four platforms: the packaged CLI installs the MacPorts `tree` port and native `rtk` fallback, verifies both executable architectures, and checks repeated installation and fallback refresh. Additional package testing remains a manual gate: on native Intel and Apple Silicon machines, test MAS, worktrunk, and signal-cli/OpenJDK. Review privileged operations first. Record commands, environment, results, and known limitations in the release notes.
+After the matrix passes, the workflow creates or reuses a draft release targeted at the exact checked commit, then uploads:
 
-Keep the release as a draft until these checks pass. The workflow marks versions with a prerelease suffix as prereleases. Publish manually, then verify the published release and archive using `gh release verify` and `gh release verify-asset`. Store release-specific results and known issues in the GitHub Release notes, rather than adding temporary test reports to the repository.
+- `brew-port-VERSION.tar.gz`, with the packaged runtime and offline installer;
+- `SHA256SUMS`, covering the archive; and
+- `install.sh`, the dual-mode bootstrap/offline installer.
+
+Existing draft assets are replaced with `--clobber`, which makes recovery from an upload failure retry-safe. The draft is published automatically only after all assets upload successfully. Versions with a prerelease suffix are marked as prereleases, so GitHub's `latest` download excludes them. A published release is never overwritten.
+
+The archive contains its own file checksums, installer, CLI modules, maps, fallbacks, completions, agent skill, README, and license. Generated archives and checksums stay in ignored `dist/` or temporary directories.
+
+## Verify locally
+
+Run the direct helper checks and both test suites under system Bash and current Bash:
+
+```sh
+/bin/bash tests/bump-version.sh
+/bin/bash tests/test.sh
+/bin/bash tests/release.sh
+```
+
+The installation suite exercises bootstrap downloads with a fake curl, malformed manifests, download failures, checksum failures, argument forwarding, offline installation, repeat installation, upgrade, and rollback. It also enforces Bash syntax, ShellCheck, and shfmt for the helper and installers.
+
+For a local package, run `bash scripts/package-release.sh`. The output directory contains the archive and its outer `SHA256SUMS`; verify them before extraction. The release workflow performs the same packaging after checking out its exact prepare SHA.
+
+The bootstrap command is:
+
+```sh
+curl -fsSL https://github.com/jeffbax/brew-port/releases/latest/download/install.sh \
+  | bash -s --
+```
+
+It downloads `SHA256SUMS` and the archive from `releases/latest/download`, validates the archive name and SHA-256 checksum before installation, and forwards installer arguments such as `--prefix`. Download the files separately if you need to inspect the installer first. Installation is offline, uses no sudo, and requires only system Bash, curl, shasum, and tar.
+
+CI also runs a real installation smoke test on disposable macOS 15/26 Intel and ARM64 runners with real MacPorts. It installs the packaged CLI, translates `tests/fixtures/smoke.Brewfile`, installs `tree` and the native `rtk` fallback, and checks repeat installation and fallback refresh. Additional package testing remains a manual gate: on native Intel and Apple Silicon machines, test MAS, worktrunk, and signal-cli/OpenJDK. Review privileged operations first and record release-specific results and known issues in the GitHub Release notes.
