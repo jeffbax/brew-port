@@ -11,6 +11,14 @@
     },
     {
       "kind": "brew",
+      "token": "csvkit",
+      "action": "fallback-root",
+      "target": "fallbacks/install-csvkit.sh",
+      "architectures": ["x86_64", "arm64"],
+      "note": "MacPorts versions csvkit by Python release; install py313-csvkit and select its unversioned commands."
+    },
+    {
+      "kind": "brew",
       "token": "mas",
       "action": "fallback-root",
       "target": "fallbacks/install-mas.sh",

@@ -9,7 +9,7 @@ Releases use semver (`vMAJOR.MINOR.PATCH`, optionally with `-IDENTIFIER.NUMBER`)
 3. The workflow computes the next version with `scripts/bump-version.sh`, changes only the `BP_VERSION` assignment, commits it as `github-actions[bot]` with `[skip ci]`, and pushes that commit to the default branch.
 4. The exact commit SHA then runs the full native matrix on macOS 15 and 26, ARM64 and Intel. Each runner executes the version helper checks, the general tests, the packaged-release tests, and the real Brewfile integration test under system Bash 3.2 and current MacPorts Bash.
 
-The version bump commit remains on the default branch if checks fail. Fix the issue, then run the same dropdown choice again. A rerun recognizes the existing computed bump and reuses its version instead of creating another bump commit. Release runs are serialized and are never cancelled.
+The version bump commit remains on the default branch if checks fail. Fix the issue, then run the same dropdown choice again. The commit records that choice as `Release-Bump` metadata; a retry with a different choice or missing metadata fails instead of silently reusing the version. Release runs are serialized and are never cancelled.
 
 The CI workflow uses a branch-aware concurrency key. A newer push cancels older checks for the same branch; pull requests use the head repository and head branch so forks do not collide.
 
@@ -21,7 +21,7 @@ After the matrix passes, the workflow creates or reuses a draft release targeted
 - `SHA256SUMS`, covering the archive; and
 - `install.sh`, the dual-mode bootstrap/offline installer.
 
-Existing draft assets are replaced with `--clobber`, which makes recovery from an upload failure retry-safe. The draft is published automatically only after all assets upload successfully. Versions with a prerelease suffix are marked as prereleases, so GitHub's `latest` download excludes them. A published release is never overwritten.
+Existing drafts without a tag are retargeted to the exact commit that passed the retry's checks. Existing tags must already target that commit. Assets are replaced with `--clobber`, and the final published tag is verified against the tested SHA. The draft is published automatically only after all assets upload successfully. Versions with a prerelease suffix are marked as prereleases, so GitHub's `latest` download excludes them. A published release is never overwritten.
 
 The archive contains its own file checksums, installer, CLI modules, maps, fallbacks, completions, agent skill, README, and license. Generated archives and checksums stay in ignored `dist/` or temporary directories.
 
@@ -31,6 +31,7 @@ Run the direct helper checks and both test suites under system Bash and current 
 
 ```sh
 /bin/bash tests/bump-version.sh
+/bin/bash tests/release-version.sh
 /bin/bash tests/test.sh
 /bin/bash tests/release.sh
 ```

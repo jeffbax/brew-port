@@ -48,23 +48,23 @@ jobs:
           set -euo pipefail
           current="$(sed -n 's/^BP_VERSION=//p' bin/brew-port)"
           [ "$(sed -n '/^BP_VERSION=/p' bin/brew-port | wc -l | tr -d ' ')" = 1 ]
-          last_bump="$(git log -G '^BP_VERSION=' --format='%s' -n 1 -- bin/brew-port || true)"
-          reuse=false
-          case "$last_bump" in
-            "Bump BP_VERSION to $current [skip ci]")
-              release_draft=''
-              if release_draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$current" --jq '.draft' 2>/dev/null)"; then
-                :
-              fi
-              if [ -z "$release_draft" ] || [ "$release_draft" = true ]; then
-                reuse=true
-              fi
-              ;;
-          esac
-          if [ "$reuse" = true ]; then
-            version="$current"
-          else
-            version="$(bash scripts/bump-version.sh "$current" "$BUMP")"
+          last_bump_commit="$(git log -G '^BP_VERSION=' --format='%H' -n 1 -- bin/brew-port || true)"
+          last_bump_subject=''
+          last_bump_type=''
+          if [ -n "$last_bump_commit" ]; then
+            last_bump_subject="$(git show -s --format='%s' "$last_bump_commit")"
+            last_bump_type="$(git show -s --format='%B' "$last_bump_commit" | sed -n 's/^Release-Bump: //p')"
+          fi
+          release_state=none
+          if release_draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$current" --jq '.draft' 2>/dev/null)"; then
+            if [ "$release_draft" = true ]; then
+              release_state=draft
+            else
+              release_state=published
+            fi
+          fi
+          version="$(bash scripts/release-version.sh "$current" "$BUMP" "$last_bump_subject" "$last_bump_type" "$release_state")"
+          if [ "$version" != "$current" ]; then
             temporary="$(mktemp)"
             awk -v replacement="BP_VERSION=$version" '
               /^BP_VERSION=/ {
@@ -80,7 +80,7 @@ jobs:
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add bin/brew-port
-            git commit -m "Bump BP_VERSION to $version [skip ci]"
+            git commit -m "Bump BP_VERSION to $version [skip ci]" -m "Release-Bump: $BUMP"
             git push origin "HEAD:$GITHUB_REF_NAME"
           fi
           sha="$(git rev-parse HEAD)"
@@ -125,11 +125,13 @@ jobs:
       - name: System Bash 3.2
         run: |
           /bin/bash tests/bump-version.sh
+          /bin/bash tests/release-version.sh
           /bin/bash tests/test.sh
           /bin/bash tests/release.sh
       - name: Current Bash
         run: |
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/bump-version.sh
+          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release-version.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/test.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release.sh
       - name: Real Brewfile installation
@@ -166,12 +168,13 @@ jobs:
             release_draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" --jq '.draft')"
             [ "$release_draft" = true ] || { echo "Refusing to overwrite published release $RELEASE_TAG." >&2; exit 1; }
           fi
-          if remote_tag="$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 { print $1 }')"; then
-            if [ -n "$remote_tag" ]; then
-              git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-              tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
-              [ "$tag_sha" = "$RELEASE_SHA" ] || { echo "Tag $RELEASE_TAG does not target $RELEASE_SHA." >&2; exit 1; }
-            fi
+          remote_tag="$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 { print $1 }')"
+          tag_exists=false
+          if [ -n "$remote_tag" ]; then
+            tag_exists=true
+            git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
+            [ "$tag_sha" = "$RELEASE_SHA" ] || { echo "Tag $RELEASE_TAG does not target $RELEASE_SHA." >&2; exit 1; }
           fi
           if [ -z "$release_id" ]; then
             create_args=("$RELEASE_TAG" --target "$RELEASE_SHA" --draft --title "brew-port $RELEASE_TAG" --generate-notes)
@@ -180,6 +183,10 @@ jobs:
             fi
             gh release create "${create_args[@]}"
             release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')"
+          fi
+          if [ "$tag_exists" = false ]; then
+            release_target="$(gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -f target_commitish="$RELEASE_SHA" --jq '.target_commitish')"
+            [ "$release_target" = "$RELEASE_SHA" ] || { echo "Draft $RELEASE_TAG does not target $RELEASE_SHA." >&2; exit 1; }
           fi
           printf 'RELEASE_ID=%s\n' "$release_id" >>"$GITHUB_ENV"
       - name: Upload release assets
@@ -191,11 +198,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ env.RELEASE_ID }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           if [[ "$VERSION" == *-* ]]; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -F prerelease=true >/dev/null
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -f target_commitish="$RELEASE_SHA" -F draft=false -F prerelease=true >/dev/null
           else
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -F prerelease=false >/dev/null
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -f target_commitish="$RELEASE_SHA" -F draft=false -F prerelease=false >/dev/null
           fi
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          [ "$tag_sha" = "$RELEASE_SHA" ] || { echo "Published tag $RELEASE_TAG does not target $RELEASE_SHA." >&2; exit 1; }

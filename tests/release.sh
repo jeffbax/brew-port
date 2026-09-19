@@ -143,7 +143,7 @@ if bash "$release_dir/install.sh" --prefix "$tmp_dir/corrupt" >/dev/null 2>&1; t
 printf '\ncorrupt\n' >>"$tmp_dir/download/brew-port-$version.tar.gz"
 if (cd "$tmp_dir/download" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1); then fail 'Corrupt download passed verification.'; fi
 if RELEASE_TAG=v9.9.9 bash "$repo_dir/scripts/package-release.sh" "$tmp_dir/wrong-tag" >/dev/null 2>&1; then fail 'Mismatched tag was accepted.'; fi
-for file in install.sh scripts/bump-version.sh scripts/package-release.sh tests/bump-version.sh tests/release.sh; do /bin/bash -n "$repo_dir/$file"; done
-shfmt -ln bash -d "$repo_dir/install.sh" "$repo_dir/scripts/bump-version.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/tests/bump-version.sh" "$repo_dir/tests/release.sh"
-shellcheck -s bash "$repo_dir/install.sh" "$repo_dir/scripts/bump-version.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/tests/bump-version.sh" "$repo_dir/tests/release.sh"
+for file in install.sh scripts/bump-version.sh scripts/package-release.sh scripts/release-version.sh tests/bump-version.sh tests/release-version.sh tests/release.sh; do /bin/bash -n "$repo_dir/$file"; done
+shfmt -ln bash -d "$repo_dir/install.sh" "$repo_dir/scripts/bump-version.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/scripts/release-version.sh" "$repo_dir/tests/bump-version.sh" "$repo_dir/tests/release-version.sh" "$repo_dir/tests/release.sh"
+shellcheck -s bash "$repo_dir/install.sh" "$repo_dir/scripts/bump-version.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/scripts/release-version.sh" "$repo_dir/tests/bump-version.sh" "$repo_dir/tests/release-version.sh" "$repo_dir/tests/release.sh"
 printf '%s\n' 'Release installation checks passed.'

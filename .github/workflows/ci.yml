@@ -43,11 +43,13 @@ jobs:
       - name: System Bash 3.2
         run: |
           /bin/bash tests/bump-version.sh
+          /bin/bash tests/release-version.sh
           /bin/bash tests/test.sh
           /bin/bash tests/release.sh
       - name: Current Bash
         run: |
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/bump-version.sh
+          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release-version.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/test.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release.sh
       - name: Real Brewfile installation

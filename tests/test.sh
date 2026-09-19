@@ -40,7 +40,7 @@ cat >"$mock_port" <<'EOF'
 case "$1" in
 version) exit 0 ;;
 install) echo "port $*"; [ "${MOCK_PORT_FAIL_TARGET:-}" != "$2" ] ;;
-selfupdate|upgrade) echo "port $*" ;;
+selfupdate|select|upgrade) echo "port $*" ;;
 *) exit 2 ;;
 esac
 EOF
@@ -95,6 +95,7 @@ brewfile="$tmp_dir/Brewfile"
 printf '%s\n' \
 	'brew "git"' \
 	'brew "asmvik/formulae/skhd"' \
+	'brew "csvkit"' \
 	'brew "mas"' \
 	'brew "rtk"' \
 	'brew "signal-cli"' \
@@ -106,6 +107,7 @@ contains "Would run: sudo $mock_port selfupdate" "$output"
 contains 'Would install MacPorts port git (for git)' "$output"
 contains 'Would install MacPorts port skhd (for asmvik/formulae/skhd)' "$output"
 contains 'Would install MacPorts port 1password-cli (for 1password-cli)' "$output"
+contains 'Would run reviewed fallback for csvkit' "$output"
 contains 'Would run reviewed fallback for mas' "$output"
 contains 'Would run reviewed fallback for rtk' "$output"
 contains 'Would run reviewed fallback for signal-cli' "$output"
@@ -114,6 +116,7 @@ contains 'Install cask firefox manually' "$output"
 
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$brewfile")"
 contains 'Would run reviewed fallback for mas' "$output"
+contains 'Would run reviewed fallback for csvkit' "$output"
 contains 'Would run reviewed fallback for rtk' "$output"
 contains 'Would run reviewed fallback for signal-cli' "$output"
 not_contains 'No verified native fallback for arm64' "$output"
@@ -121,6 +124,11 @@ not_contains 'No verified native fallback for arm64' "$output"
 if output="$(MOCK_ARCH=x86_64 MOCK_TRANSLATED=1 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_SYSCTL_BIN="$mock_sysctl" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$brewfile" 2>&1)"; then fail 'Rosetta execution unexpectedly proceeded.'; fi
 contains 'brew-port cannot run under Rosetta' "$output"
 not_contains 'Would run reviewed fallback' "$output"
+
+: >"$sudo_log"
+SUDO_LOG="$sudo_log" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$repo_dir/maps/fallbacks/install-csvkit.sh" >/dev/null
+grep -Fqx -- "-n $mock_port install py313-csvkit" "$sudo_log" || fail 'csvkit fallback did not install the versioned MacPorts port.'
+grep -Fqx -- "-n $mock_port select --set csvkit py313-csvkit" "$sudo_log" || fail 'csvkit fallback did not select the unversioned commands.'
 
 ruby_forms_brewfile="$tmp_dir/ruby-forms.Brewfile"
 printf '%s\n' "brew 'git'" 'brew("asmvik/formulae/skhd")' "cask '1password-cli'" 'cask("firefox")' >"$ruby_forms_brewfile"
