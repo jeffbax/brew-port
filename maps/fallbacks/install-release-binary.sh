@@ -34,6 +34,7 @@ fi
 	exit 1
 }
 curl_bin="${BREW_PORT_CURL_BIN:-curl}"
+github_token="${GITHUB_TOKEN:-}"
 sudo_bin="${BREW_PORT_SUDO_BIN:-sudo}"
 installer_bin="${BREW_PORT_INSTALLER_BIN:-/usr/sbin/installer}"
 state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -47,7 +48,10 @@ valid_sha() { [[ "$1" =~ ^[[:xdigit:]]{64}$ ]]; }
 state_value() { [ -f "$state_file" ] && awk -F '\t' -v key="$fallback_id" -v col="$1" '$1 == key { print $col; exit }' "$state_file"; }
 
 release_json="$tmp_dir/release.json"
-if ! "$curl_bin" --fail --location --proto '=https' --tlsv1.2 --silent --show-error --output "$release_json" "https://api.github.com/repos/$repository/releases/latest"; then
+api_curl_args=(--fail --location --proto '=https' --tlsv1.2 --silent --show-error)
+# CI supplies its short-lived token to avoid unauthenticated API rate limits.
+if [ -n "$github_token" ]; then api_curl_args+=(--header "Authorization: Bearer $github_token"); fi
+if ! "$curl_bin" "${api_curl_args[@]}" --output "$release_json" "https://api.github.com/repos/$repository/releases/latest"; then
 	existing_tag="$(state_value 2 || true)"
 	existing_hash="$(state_value 6 || true)"
 	if [ -n "$existing_tag" ] && [ -x "$destination" ] && valid_sha "$existing_hash" && [ "$(sha256 "$destination")" = "$existing_hash" ]; then

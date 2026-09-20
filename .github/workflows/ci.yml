@@ -34,6 +34,8 @@ jobs:
         id: macports
         with:
           parameters: .github/parameters/setup-macports.yaml
+      - name: Install ShellCheck from a bottle
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install --force-bottle shellcheck
       - name: Expose MacPorts binaries
         run: echo "${{ steps.macports.outputs.prefix }}/bin" >> "$GITHUB_PATH"
       - name: Verify native architecture
@@ -56,3 +58,4 @@ jobs:
         run: /bin/bash tests/integration.sh
         env:
           BREW_PORT_PORT_BIN: ${{ steps.macports.outputs.prefix }}/bin/port
+          GITHUB_TOKEN: ${{ github.token }}

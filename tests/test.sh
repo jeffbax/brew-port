@@ -400,9 +400,11 @@ release_json="$tmp_dir/release.json"
 printf '{"tag_name":"v1.2.3","assets":[{"name":"rtk-aarch64-apple-darwin.tar.gz","browser_download_url":"https://example.invalid/rtk/aarch64","digest":"sha256:%s"}]}' "$digest" >"$release_json"
 mock_curl="$tmp_dir/curl"
 curl_log="$tmp_dir/curl.log"
+curl_args_log="$tmp_dir/curl-args.log"
 cat >"$mock_curl" <<'EOF'
 #!/usr/bin/env bash
 output_file= url=
+[ -z "${MOCK_CURL_ARGS_LOG:-}" ] || printf '%s\n' "$@" >>"$MOCK_CURL_ARGS_LOG"
 while [ "$#" -gt 0 ]; do
   case "$1" in --output) shift; output_file="$1" ;; *) url="$1" ;; esac
   shift
@@ -416,10 +418,11 @@ esac
 EOF
 chmod +x "$mock_curl"
 fallback_home="$tmp_dir/fallback-home"
-output="$(HOME="$fallback_home" XDG_STATE_HOME="$tmp_dir/state" BREW_PORT_ARCH=arm64 BREW_PORT_CURL_BIN="$mock_curl" MOCK_CURL_LOG="$curl_log" MOCK_RELEASE_JSON="$release_json" MOCK_RELEASE_ARCHIVE="$archive" "$repo_dir/maps/fallbacks/install-rtk.sh")"
+output="$(HOME="$fallback_home" XDG_STATE_HOME="$tmp_dir/state" GITHUB_TOKEN=ci-token BREW_PORT_ARCH=arm64 BREW_PORT_CURL_BIN="$mock_curl" MOCK_CURL_LOG="$curl_log" MOCK_CURL_ARGS_LOG="$curl_args_log" MOCK_RELEASE_JSON="$release_json" MOCK_RELEASE_ARCHIVE="$archive" "$repo_dir/maps/fallbacks/install-rtk.sh")"
 contains 'Installed rtk release v1.2.3.' "$output"
 contains 'rtk-arm64' "$("$fallback_home/.local/bin/rtk")"
 grep -Fqx 'https://example.invalid/rtk/aarch64' "$curl_log" || fail 'arm64 fallback did not select the aarch64 asset.'
+[ "$(grep -Fxc -- 'Authorization: Bearer ci-token' "$curl_args_log")" -eq 1 ] || fail 'fallback did not authenticate only its GitHub metadata request.'
 
 output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" refresh-fallbacks --dry-run)"
 contains 'Would run reviewed fallback for rtk' "$output"

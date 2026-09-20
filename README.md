@@ -93,7 +93,7 @@ bash tests/release.sh
 
 The test suite enforces `shfmt -d`, Bash syntax checks, and ShellCheck.
 
-CI also runs `tests/integration.sh` on disposable macOS 15/26 Intel and ARM64 runners with real MacPorts. It installs the packaged CLI, translates `tests/fixtures/smoke.Brewfile`, installs `tree` and the native `rtk` fallback, and checks repeat installation and fallback refresh. This test installs real system packages and requires noninteractive sudo; run it on a disposable machine. The Checks workflow can also be started manually without cutting a release.
+CI also runs `tests/integration.sh` on disposable macOS 15/26 Intel and ARM64 runners with real MacPorts. It installs the packaged CLI, translates `tests/fixtures/smoke.Brewfile`, installs `shfmt` from a MacPorts binary archive, and downloads the native `rtk` fallback. This test installs real system packages and requires noninteractive sudo; run it on a disposable machine. The Checks workflow can also be started manually without cutting a release.
 
 ## Releases
 

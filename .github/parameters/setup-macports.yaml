@@ -3,5 +3,4 @@ prefix: /opt/local
 ports:
   - name: bash
   - name: jq
-  - name: shellcheck
   - name: shfmt
