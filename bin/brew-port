@@ -19,6 +19,7 @@ source "$BP_BIN_DIR/lib/brew-port/maps.bash"
 source "$BP_BIN_DIR/lib/brew-port/reporting.bash"
 source "$BP_BIN_DIR/lib/brew-port/macports.bash"
 source "$BP_BIN_DIR/lib/brew-port/fallbacks.bash"
+source "$BP_BIN_DIR/lib/brew-port/services.bash"
 
 BP_VERSION=0.1.0-rc.1
 BP_DRY_RUN=false
@@ -29,6 +30,10 @@ Usage:
   brew-port install [--dry-run] [--map FILE ...] BREWFILE...
   brew-port update [--dry-run] [--map FILE ...]
   brew-port refresh-fallbacks [--dry-run] [--map FILE ...]
+  brew-port services import-homebrew [--map FILE ...] FORMULA...
+  brew-port services list
+  brew-port services start [--dry-run] [--map FILE ...] TOKEN...
+  brew-port services stop [--dry-run] TOKEN...
   brew-port doctor
   brew-port version
   brew-port map init | validate [--map FILE ...] | explain KIND TOKEN [--map FILE ...]
@@ -224,6 +229,20 @@ completion_command() {
 	else cat "$source_file"; fi
 }
 
+services_command() {
+	local subcommand="${1:-}"
+	[ -n "$subcommand" ] || bp_die 'services requires import-homebrew, list, start, or stop.'
+	shift
+	bp_init_services
+	case "$subcommand" in
+	import-homebrew) bp_services_import "$@" ;;
+	list) bp_services_list "$@" ;;
+	start) bp_services_start "$@" ;;
+	stop) bp_services_stop "$@" ;;
+	*) bp_die "Unknown services command: $subcommand" ;;
+	esac
+}
+
 [ "$#" -gt 0 ] || {
 	usage >&2
 	exit 1
@@ -243,6 +262,7 @@ version)
 	bp_log "brew-port $BP_VERSION"
 	;;
 map) map_command "$@" ;;
+services) services_command "$@" ;;
 completion) completion_command "$@" ;;
 --help | -h | help) usage ;;
 *)

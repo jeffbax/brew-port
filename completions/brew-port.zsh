@@ -8,6 +8,7 @@ _brew_port() {
     'doctor:report host and prerequisite status'
     'version:print version'
     'map:manage mappings'
+    'services:manage imported user services'
     'completion:print or install completion'
   )
   _arguments '1:command:->command' '*::argument:->argument'
@@ -16,6 +17,7 @@ _brew_port() {
     argument) case $words[2] in
       install|update|refresh-fallbacks) _arguments '--dry-run[do not change the machine]' '--map=[mapping file]:map file:_files' ;;
       map) _values 'map command' init validate explain ;;
+      services) _values 'service command' import-homebrew 'list[show imported service status]' start stop ;;
       completion) _values 'shell' bash fish zsh install ;;
     esac ;;
   esac

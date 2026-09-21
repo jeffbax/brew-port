@@ -81,6 +81,8 @@ fi
 mkdir "$tmp_dir/extracted"
 tar -xzf "$tmp_dir/download/brew-port-$version.tar.gz" -C "$tmp_dir/extracted"
 release_dir="$tmp_dir/extracted/brew-port-$version"
+[ -f "$release_dir/bin/lib/brew-port/services.bash" ] || fail 'Release archive omitted service support.'
+[ -f "$release_dir/maps/services.schema.json" ] || fail 'Release archive omitted the service schema.'
 mkdir "$tmp_dir/offline"
 for command_name in sudo curl port jq; do
 	# Literal mock body records any forbidden installer dependency.

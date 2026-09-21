@@ -22,21 +22,33 @@ fail() {
 }
 contains() { [[ "$2" == *"$1"* ]] || fail "Expected output to contain: $1"; }
 not_contains() { [[ "$2" != *"$1"* ]] || fail "Expected output not to contain: $1"; }
+xml_metacharacters=$'a&b\\path<>"\''
+xml_escaped='a&amp;b\path&lt;&gt;&quot;&apos;'
+xml_escaped_actual="$(/bin/bash -c 'source "$1"; bp_service_xml_escape "$2"' -- "$repo_dir/bin/lib/brew-port/services.bash" "$xml_metacharacters")"
+[ "$xml_escaped_actual" = "$xml_escaped" ] || fail 'System Bash XML escaping changed a service value.'
 
 mock_uname="$tmp_dir/uname"
 mock_port="$tmp_dir/port"
 mock_sudo="$tmp_dir/sudo"
 mock_sysctl="$tmp_dir/sysctl"
 mock_mas="$tmp_dir/mas"
+mock_brew="$tmp_dir/brew"
+mock_curl="$tmp_dir/curl"
+mock_launchctl="$tmp_dir/launchctl"
+mock_plutil="$tmp_dir/plutil"
 sudo_log="$tmp_dir/sudo.log"
 jq_log="$tmp_dir/jq.log"
 mas_log="$tmp_dir/mas.log"
+curl_log="$tmp_dir/curl.log"
+brew_log="$tmp_dir/brew.log"
+launchctl_log="$tmp_dir/launchctl.log"
 active_ports="$tmp_dir/active-ports"
 mas_installed="$tmp_dir/mas-installed"
 : >"$active_ports"
 : >"$mas_installed"
 export MOCK_ACTIVE_PORTS="$active_ports"
 export MOCK_MAS_INSTALLED="$mas_installed"
+export MOCK_JQ_LOG="$jq_log"
 cat >"$mock_uname" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in -s) echo Darwin ;; -m) echo "${MOCK_ARCH:?}" ;; *) exit 2 ;; esac
@@ -51,9 +63,21 @@ case "$1" in
 version) exit 0 ;;
 install)
 	echo "port $*"
-	for target in "${@:2}"; do [ "${MOCK_PORT_FAIL_TARGET:-}" != "$target" ] || exit 1; done
+	for target in "${@:2}"; do
+		[ "${MOCK_PORT_FAIL_TARGET:-}" != "$target" ] || exit 1
+		if [ "${MOCK_PORT_INSTALL_ACTIVE:-0}" = 1 ]; then
+			printf '%s\n' "$target" >>"${MOCK_ACTIVE_PORTS:?}"
+			mkdir -p "${MOCK_MACPORTS_PREFIX:?}/bin"
+			printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${MOCK_MACPORTS_PREFIX:?}/bin/$target"
+			chmod +x "${MOCK_MACPORTS_PREFIX:?}/bin/$target"
+		fi
+	done
 	;;
 selfupdate|select|upgrade) echo "port $*" ;;
+-q)
+	[ "${2:-} ${3:-}" = 'info --version' ] && { printf '%s\n' "${MOCK_PORT_VERSION:-}"; exit 0; }
+	exit 2
+    ;;
 *) exit 2 ;;
 esac
 EOF
@@ -91,9 +115,106 @@ install)
 esac
 EOF
 chmod +x "$mock_mas"
+cat >"$mock_brew" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${MOCK_BREW_LOG:?}"
+exit 99
+EOF
+cat >"$mock_curl" <<'EOF'
+#!/usr/bin/env bash
+output_file= url=
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--output)
+		shift
+		output_file="$1"
+		;;
+	*) url="$1" ;;
+	esac
+	shift
+done
+printf '%s\n' "$url" >>"${MOCK_CURL_LOG:?}"
+[ "${MOCK_CURL_HTTP_FAIL:-0}" != 1 ] || exit 22
+formula="${url##*/}"
+formula="${formula%.json}"
+cp "${MOCK_FORMULAE_DIR:?}/$formula.json" "$output_file"
+EOF
+cat >"$mock_launchctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${MOCK_LAUNCHCTL_LOG:?}"
+case "$1" in
+print)
+	case "$2" in
+	gui/*/*)
+		label="${2##*/}"
+		[ "${MOCK_GUI_SESSION:-1}" = 1 ] || exit 1
+		case "$label" in
+		dev.brew-port.herdr)
+			if grep -Fxq -- "$label" "${MOCK_HOMEBREW_LABELS:?}"; then
+				printf '%s\n' 'state = running' 'pid = 4242' 'last exit code = 0'
+				exit 0
+			fi
+			exit 1
+			;;
+		dev.brew-port.restarting-service)
+			printf '%s\n' 'state = spawn scheduled' "last exit code = ${MOCK_RESTARTING_SERVICE_EXIT:-1}"
+			exit 0
+			;;
+		dev.brew-port.colima)
+			printf '%s\n' 'state = waiting' 'last exit code = 0'
+			exit 0
+			;;
+		dev.brew-port.atuin)
+			printf '%s\n' 'state = exited' 'last exit code = 1'
+			exit 0
+			;;
+		*)
+			if grep -Fxq -- "$label" "${MOCK_HOMEBREW_LABELS:?}"; then
+				printf '%s\n' 'state = running' 'pid = 4242' 'last exit code = 0'
+				exit 0
+			fi
+			exit 1
+			;;
+		esac
+		;;
+	gui/*)
+		[ "${MOCK_GUI_SESSION:-1}" = 1 ]
+		;;
+	*) exit 2 ;;
+	esac
+	;;
+bootstrap)
+	[ "${MOCK_LAUNCHCTL_FAIL:-0}" != 1 ] || exit 1
+	if [ "${MOCK_LAUNCHCTL_FAIL_ONCE:-0}" = 1 ] && [ ! -e "${MOCK_LAUNCHCTL_FAIL_ONCE_STATE:?}" ]; then
+		: >"${MOCK_LAUNCHCTL_FAIL_ONCE_STATE:?}"
+		exit 1
+	fi
+	label="${3##*/}"
+	label="${label%.plist}"
+	grep -Fxq -- "$label" "${MOCK_HOMEBREW_LABELS:?}" && exit 1
+	printf '%s\n' "$label" >>"${MOCK_HOMEBREW_LABELS:?}"
+	;;
+bootout)
+	[ "${MOCK_LAUNCHCTL_BOOTOUT_FAIL:-0}" != 1 ] || exit 1
+	label="${3##*/}"
+	label="${label%.plist}"
+	grep -Fxv -- "$label" "${MOCK_HOMEBREW_LABELS:?}" >"${MOCK_HOMEBREW_LABELS:?}.next" || true
+	mv "${MOCK_HOMEBREW_LABELS:?}.next" "${MOCK_HOMEBREW_LABELS:?}"
+	;;
+*) exit 2 ;;
+esac
+EOF
+cat >"$mock_plutil" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = -lint ] || exit 2
+[ "${MOCK_PLUTIL_FAIL:-0}" != 1 ] || exit 1
+grep -Fq '<plist version="1.0">' "$2"
+EOF
+chmod +x "$mock_brew" "$mock_curl" "$mock_launchctl" "$mock_plutil"
 
 custom_port_bin="$tmp_dir/custom-macports/bin"
 mkdir -p "$custom_port_bin"
+custom_port_prefix="$(CDPATH='' cd -- "$custom_port_bin/.." && pwd -P)"
 ln -s "$mock_port" "$custom_port_bin/port"
 cat >"$custom_port_bin/jq" <<'EOF'
 #!/usr/bin/env bash
@@ -108,6 +229,8 @@ command -v "$shfmt_bin" >/dev/null || fail 'shfmt is required to run the checks.
 [ -x "$utility" ] || fail 'brew-port must be executable.'
 [ ! -e "$repo_dir/bin/macports-brewfile" ] || fail 'The old CLI must not remain.'
 [ -f "$repo_dir/.agents/skills/brew-port/SKILL.md" ] || fail 'Missing agent skill.'
+grep -Fqx "complete -c brew-port -n '__fish_seen_subcommand_from start stop' -l dry-run" "$repo_dir/completions/brew-port.fish" || fail 'Fish completion did not scope --dry-run to services start and stop.'
+grep -Fqx "complete -c brew-port -n '__fish_seen_subcommand_from import-homebrew start' -l map -r" "$repo_dir/completions/brew-port.fish" || fail 'Fish completion did not scope --map to services import-homebrew and start.'
 "$utility" map validate | grep -Fq 'Mappings are valid.'
 prefix_brewfile="$tmp_dir/custom-prefix.Brewfile"
 printf '%s\n' 'brew "git"' >"$prefix_brewfile"
@@ -388,6 +511,319 @@ output="$(XDG_STATE_HOME="$tmp_dir/dry-state" MOCK_ARCH=arm64 SUDO_LOG="$sudo_lo
 contains "Would run: sudo $mock_port upgrade outdated" "$output"
 [ ! -s "$sudo_log" ] || fail 'Dry-run update used sudo.'
 [ ! -e "$tmp_dir/dry-state/brew-port" ] || fail 'Dry-run update wrote fallback state.'
+
+output="$($utility services list)"
+contains 'No imported services.' "$output"
+
+formulae_dir="$tmp_dir/formulae"
+mkdir "$formulae_dir"
+cat >"$formulae_dir/herdr.json" <<'EOF'
+{"name":"herdr","full_name":"herdr","tap":"homebrew/core","versions":{"stable":"0.9.1"},"generated_date":"2026-09-19","service":{"run":["$HOMEBREW_PREFIX/opt/herdr/bin/herdr","server"],"run_type":"immediate","keep_alive":{"always":true},"label":"org.example.herdr","log_path":"$HOMEBREW_PREFIX/var/log/herdr.log","error_log_path":"$HOMEBREW_PREFIX/var/log/herdr.log"}}
+EOF
+cat >"$formulae_dir/restarting-service.json" <<'EOF'
+{"name":"restarting-service","full_name":"restarting-service","tap":"homebrew/core","versions":{"stable":"1.0.0"},"generated_date":"2026-09-19","service":{"run":["$HOMEBREW_PREFIX/opt/restarting-service/bin/restarting-service"],"run_type":"immediate","keep_alive":{"successful_exit":false},"log_path":"$HOMEBREW_PREFIX/var/log/restarting-service.log","error_log_path":"$HOMEBREW_PREFIX/var/log/restarting-service.log"}}
+EOF
+cat >"$formulae_dir/atuin.json" <<'EOF'
+{"name":"atuin","full_name":"atuin","tap":"homebrew/core","versions":{"stable":"18.22.0"},"generated_date":"2026-09-11","service":{"run":["$HOMEBREW_PREFIX/opt/atuin/bin/atuin","daemon","start"],"run_type":"immediate","keep_alive":{"always":true},"log_path":"$HOMEBREW_PREFIX/var/log/atuin.log","error_log_path":"$HOMEBREW_PREFIX/var/log/atuin.log"}}
+EOF
+cat >"$formulae_dir/colima.json" <<'EOF'
+{"name":"colima","full_name":"colima","tap":"homebrew/core","versions":{"stable":"0.10.3"},"generated_date":"2026-09-18","service":{"run":["$HOMEBREW_PREFIX/opt/colima/bin/colima","start","-f"],"run_type":"immediate","keep_alive":{"successful_exit":true},"environment_variables":{"PATH":"$HOMEBREW_PREFIX/bin:$HOMEBREW_PREFIX/sbin:/usr/bin:/bin:/usr/sbin:/sbin"},"working_dir":"/$HOME","log_path":"$HOMEBREW_PREFIX/var/log/colima.log","error_log_path":"$HOMEBREW_PREFIX/var/log/colima.log"}}
+EOF
+cat >"$formulae_dir/no-service.json" <<'EOF'
+{"name":"no-service","full_name":"no-service","tap":"homebrew/core","versions":{"stable":"1.0"},"generated_date":"2026-09-19"}
+EOF
+printf '%s\n' '{not json' >"$formulae_dir/malformed.json"
+cat >"$formulae_dir/unsupported.json" <<'EOF'
+{"name":"unsupported","full_name":"unsupported","tap":"homebrew/core","versions":{"stable":"1.0"},"generated_date":"2026-09-19","service":{"run":["$HOMEBREW_PREFIX/opt/unsupported/bin/unsupported"],"run_type":"interval","keep_alive":{"always":true}}}
+EOF
+cat >"$formulae_dir/placeholder.json" <<'EOF'
+{"name":"placeholder","full_name":"placeholder","tap":"homebrew/core","versions":{"stable":"1.0"},"generated_date":"2026-09-19","service":{"run":["$HOMEBREW_PREFIX/opt/placeholder/bin/placeholder","$UNSUPPORTED"],"run_type":"immediate","keep_alive":{"always":true}}}
+EOF
+service_map="$tmp_dir/services-map.json"
+cat >"$service_map" <<'EOF'
+{"version":1,"mappings":[
+ {"kind":"brew","token":"herdr","action":"port","target":"herdr"},
+ {"kind":"brew","token":"restarting-service","action":"port","target":"restarting-service"},
+ {"kind":"brew","token":"atuin","action":"port","target":"atuin"},
+ {"kind":"brew","token":"colima","action":"port","target":"colima"}
+]}
+EOF
+homebrew_labels="$tmp_dir/homebrew-labels"
+: >"$homebrew_labels"
+: >"$curl_log"
+: >"$brew_log"
+service_import_env=(
+	MOCK_ARCH=arm64
+	MOCK_BREW_LOG="$brew_log"
+	MOCK_CURL_LOG="$curl_log"
+	MOCK_FORMULAE_DIR="$formulae_dir"
+	PATH="$tmp_dir:$PATH"
+	BREW_PORT_CURL_BIN="$mock_curl"
+	BREW_PORT_UNAME_BIN="$mock_uname"
+	BREW_PORT_PORT_BIN="$custom_port_bin/port"
+	BREW_PORT_SUDO_BIN="$mock_sudo"
+)
+output="$(env "${service_import_env[@]}" "$utility" services import-homebrew --map "$service_map" herdr restarting-service atuin colima)"
+contains 'Imported disabled service definition for herdr.' "$output"
+service_file="$XDG_CONFIG_HOME/brew-port/services.json"
+[ -f "$service_file" ] || fail 'Service import did not create services.json.'
+"$custom_port_bin/jq" -e '
+  .version == 1 and (.services | length == 4) and
+  ([.services[].formula] | sort == ["atuin", "colima", "herdr", "restarting-service"]) and
+  (.services[] | select(.formula == "herdr") | .executable == "bin/herdr" and .arguments == ["server"] and .keep_alive == {always: true}) and
+  (.services[] | select(.formula == "restarting-service") | .keep_alive == {successful_exit: false}) and
+  (.services[] | select(.formula == "atuin") | .arguments == ["daemon", "start"]) and
+  (.services[] | select(.formula == "colima") |
+    .environment.PATH == "'"$custom_port_prefix"'/bin:'"$custom_port_prefix"'/sbin:/usr/bin:/bin:/usr/sbin:/sbin" and
+    .working_directory == "'"$HOME"'")
+' "$service_file" >/dev/null || fail 'Imported service translation was incorrect.'
+[ "$(wc -l <"$curl_log" | tr -d ' ')" = 4 ] || fail 'Formulae metadata was not fetched exactly once per import.'
+[ ! -s "$brew_log" ] || fail 'Service import invoked the Homebrew CLI.'
+if output="$(env "${service_import_env[@]}" "$utility" services import-homebrew herdr 2>&1)"; then fail 'Existing imported service was refreshed unexpectedly.'; fi
+contains 'Service already imported: herdr.' "$output"
+if output="$(env "${service_import_env[@]}" "$utility" services import-homebrew no-service 2>&1)"; then fail 'Formula without a service was imported.'; fi
+contains 'Unsupported or malformed Homebrew service metadata for no-service.' "$output"
+if output="$(env "${service_import_env[@]}" "$utility" services import-homebrew malformed 2>&1)"; then fail 'Malformed Formulae JSON was imported.'; fi
+contains 'Unsupported or malformed Homebrew service metadata for malformed.' "$output"
+if output="$(env MOCK_CURL_HTTP_FAIL=1 "${service_import_env[@]}" "$utility" services import-homebrew missing 2>&1)"; then fail 'Formulae HTTP failure was accepted.'; fi
+contains 'Could not fetch Homebrew formula metadata for missing.' "$output"
+if output="$(env "${service_import_env[@]}" "$utility" services import-homebrew unsupported 2>&1)"; then fail 'Unsupported run type was imported.'; fi
+contains 'Unsupported or malformed Homebrew service metadata for unsupported.' "$output"
+if output="$(env "${service_import_env[@]}" "$utility" services import-homebrew placeholder 2>&1)"; then fail 'Unsupported placeholder was imported.'; fi
+contains 'Unsupported or malformed Homebrew service metadata for placeholder.' "$output"
+if output="$(env "${service_import_env[@]}" "$utility" services import-homebrew homebrew/core/herdr 2>&1)"; then fail 'Tap-qualified formula was imported.'; fi
+contains 'Homebrew/core formula names must be unqualified lowercase tokens' "$output"
+
+service_start_env=(
+	MOCK_ARCH=arm64
+	MOCK_ACTIVE_PORTS="$active_ports"
+	MOCK_MACPORTS_PREFIX="$custom_port_prefix"
+	MOCK_HOMEBREW_LABELS="$homebrew_labels"
+	MOCK_LAUNCHCTL_LOG="$launchctl_log"
+	SUDO_LOG="$sudo_log"
+	BREW_PORT_UNAME_BIN="$mock_uname"
+	BREW_PORT_PORT_BIN="$custom_port_bin/port"
+	BREW_PORT_SUDO_BIN="$mock_sudo"
+	BREW_PORT_LAUNCHCTL_BIN="$mock_launchctl"
+	BREW_PORT_PLUTIL_BIN="$mock_plutil"
+)
+: >"$active_ports"
+: >"$sudo_log"
+: >"$launchctl_log"
+output="$(env MOCK_PORT_INSTALL_ACTIVE=1 MOCK_PORT_VERSION=0.9.0 "${service_start_env[@]}" "$utility" services start --map "$service_map" herdr)"
+contains 'Warning: Homebrew herdr is 0.9.1; MacPorts herdr is 0.9.0.' "$output"
+contains 'Started brew-port service herdr.' "$output"
+herdr_plist="$HOME/Library/LaunchAgents/dev.brew-port.herdr.plist"
+[ -f "$herdr_plist" ] || fail 'Service start did not write the owned LaunchAgent.'
+grep -Fq "<string>$custom_port_prefix/bin/herdr</string>" "$herdr_plist" || fail 'Plist did not use the MacPorts executable.'
+grep -Fq '<string>server</string>' "$herdr_plist" || fail 'Plist omitted imported arguments.'
+grep -Fq '<key>RunAtLoad</key><true/>' "$herdr_plist" || fail 'Immediate service plist did not run at load.'
+grep -Fq "<string>$XDG_STATE_HOME/brew-port/services/herdr.log</string>" "$herdr_plist" || fail 'Plist did not use the brew-port state log path.'
+grep -Fqx -- "-n $custom_port_bin/port install herdr" "$sudo_log" || fail 'Service start did not install its mapped port.'
+grep -Fqx "bootstrap gui/$UID $herdr_plist" "$launchctl_log" || fail 'Service bootstrap did not follow plist creation.'
+printf '%s\n' 'herdr started' >"$XDG_STATE_HOME/brew-port/services/herdr.log"
+printf '%s\n' old $'bad\033[2J\233Kfile descriptor' '' >"$XDG_STATE_HOME/brew-port/services/restarting-service.err.log"
+: >"$XDG_STATE_HOME/brew-port/services/atuin.err.log"
+: >"$XDG_STATE_HOME/brew-port/services/colima.log"
+service_file_temporary="$tmp_dir/services-list-overrides.json"
+"$custom_port_bin/jq" '
+  .services |= map(if .token == "atuin" then .overrides.keep_alive = {always: false} else . end)
+' "$service_file" >"$service_file_temporary"
+mv "$service_file_temporary" "$service_file"
+cat >"$XDG_CONFIG_HOME/brew-port/mappings.json" <<'EOF'
+{"version":1,"mappings":[
+ {"kind":"brew","token":"restarting-service","action":"port","target":"alternate-restarting-service"}
+]}
+EOF
+tail_mock_dir="$tmp_dir/tail-mock"
+tail_log="$tmp_dir/tail.log"
+tail_bin="$(command -v tail)"
+mkdir "$tail_mock_dir"
+cat >"$tail_mock_dir/tail" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${MOCK_TAIL_LOG:?}"
+exec "${MOCK_TAIL_BIN:?}" "$@"
+EOF
+chmod +x "$tail_mock_dir/tail"
+list_files_before="$(find "$XDG_STATE_HOME" -type f | LC_ALL=C sort)"
+curl_count_before="$(wc -l <"$curl_log" | tr -d ' ')"
+sudo_log_before="$(cat "$sudo_log")"
+: >"$launchctl_log"
+: >"$jq_log"
+list_output="$(env PATH="$tail_mock_dir:$tmp_dir/bash-runtime:/usr/bin:/bin" MOCK_TAIL_LOG="$tail_log" MOCK_TAIL_BIN="$tail_bin" "${service_start_env[@]}" "$utility" services list)"
+[ -s "$jq_log" ] || fail 'Service list did not use the selected MacPorts prefix jq.'
+not_contains 'TOKEN  FORMULA  PORT  CLI  STATE  PID  EXIT  LOG  LAST' "$list_output"
+contains 'herdr: running' "$list_output"
+contains "executable: found $custom_port_prefix/bin/herdr" "$list_output"
+contains 'pid: 4242' "$list_output"
+contains 'last exit: 0' "$list_output"
+contains 'herdr started' "$list_output"
+contains 'restarting-service: restarting' "$list_output"
+contains 'port: alternate-restarting-service' "$list_output"
+contains "executable: missing $custom_port_prefix/bin/restarting-service" "$list_output"
+contains 'pid: none' "$list_output"
+contains 'last exit: 1' "$list_output"
+contains 'launchd: "spawn scheduled"' "$list_output"
+contains 'stderr: present' "$list_output"
+contains 'last line: bad?[2J?Kfile descriptor' "$list_output"
+not_contains $'\033' "$list_output"
+not_contains $'\233' "$list_output"
+contains "stdout: missing — path: $XDG_STATE_HOME/brew-port/services/restarting-service.log" "$list_output"
+contains 'atuin: stopped' "$list_output"
+contains 'stderr: empty' "$list_output"
+contains 'colima: restarting' "$list_output"
+contains 'stdout: empty' "$list_output"
+grep -Fqx -- "-n 100 $XDG_STATE_HOME/brew-port/services/restarting-service.err.log" "$tail_log" || fail 'Service list did not bound log inspection.'
+list_files_after="$(find "$XDG_STATE_HOME" -type f | LC_ALL=C sort)"
+[ "$list_files_before" = "$list_files_after" ] || fail 'Service list created or removed a persistent file.'
+[ "$curl_count_before" = "$(wc -l <"$curl_log" | tr -d ' ')" ] || fail 'Service list fetched metadata.'
+[ "$sudo_log_before" = "$(cat "$sudo_log")" ] || fail 'Service list invoked a privileged MacPorts action.'
+not_contains 'bootstrap' "$(cat "$launchctl_log")"
+not_contains 'bootout' "$(cat "$launchctl_log")"
+[ ! -e "$XDG_STATE_HOME/brew-port/services/restarting-service.log" ] || fail 'Service list created a missing stdout log.'
+
+list_output="$(env PATH="$tmp_dir/bash-runtime:/usr/bin:/bin" MOCK_RESTARTING_SERVICE_EXIT=0 "${service_start_env[@]}" "$utility" services list)"
+contains 'restarting-service: stopped' "$list_output"
+
+unavailable_awk_dir="$tmp_dir/unavailable-awk"
+mkdir -p "$unavailable_awk_dir"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' >"$unavailable_awk_dir/awk"
+chmod +x "$unavailable_awk_dir/awk"
+list_output="$(env PATH="$unavailable_awk_dir:$tmp_dir/bash-runtime:/usr/bin:/bin" "${service_start_env[@]}" "$utility" services list)"
+contains "stderr: unavailable — path: $XDG_STATE_HOME/brew-port/services/restarting-service.err.log" "$list_output"
+
+list_output="$(env MOCK_GUI_SESSION=0 "${service_start_env[@]}" "$utility" services list)"
+contains 'herdr: no GUI session' "$list_output"
+contains 'launchd: "no GUI session"' "$list_output"
+
+: >"$launchctl_log"
+list_output="$(env "${service_start_env[@]}" BREW_PORT_LAUNCHCTL_BIN="$tmp_dir/missing-launchctl" "$utility" services list)"
+contains 'herdr: launchctl unavailable' "$list_output"
+contains 'pid: unknown' "$list_output"
+[ ! -s "$launchctl_log" ] || fail 'Service list queried launchctl after it was unavailable.'
+
+service_file_temporary="$tmp_dir/services-herdr-update.json"
+"$custom_port_bin/jq" '
+  .services |= map(if .token == "herdr" then .overrides.arguments = ["server", "--updated"] else . end)
+' "$service_file" >"$service_file_temporary"
+mv "$service_file_temporary" "$service_file"
+: >"$launchctl_log"
+output="$(env "${service_start_env[@]}" "$utility" services start --map "$service_map" herdr)"
+contains 'Started brew-port service herdr.' "$output"
+grep -Fqx "bootout gui/$UID $herdr_plist" "$launchctl_log" || fail 'Repeated service start did not boot out the prior job.'
+grep -Fqx "bootstrap gui/$UID $herdr_plist" "$launchctl_log" || fail 'Repeated service start did not bootstrap the replacement job.'
+grep -Fq '<string>--updated</string>' "$herdr_plist" || fail 'Reloaded service plist did not use the updated configuration.'
+
+"$custom_port_bin/jq" '
+  .services |= map(if .token == "herdr" then .overrides.arguments = ["server", "--not-loaded"] else . end)
+' "$service_file" >"$service_file_temporary"
+mv "$service_file_temporary" "$service_file"
+
+: >"$launchctl_log"
+if output="$(env MOCK_PLUTIL_FAIL=1 "${service_start_env[@]}" "$utility" services start --map "$service_map" herdr 2>&1)"; then fail 'Invalid replacement plist was accepted.'; fi
+contains "Generated plist is invalid: $herdr_plist" "$output"
+not_contains 'bootout' "$(cat "$launchctl_log")"
+grep -Fq '<string>--updated</string>' "$herdr_plist" || fail 'Invalid replacement plist replaced the active plist.'
+grep -Fxq dev.brew-port.herdr "$homebrew_labels" || fail 'Invalid replacement plist unloaded the active service.'
+
+: >"$launchctl_log"
+launchctl_fail_once="$tmp_dir/launchctl-fail-once"
+if output="$(env MOCK_LAUNCHCTL_FAIL_ONCE=1 MOCK_LAUNCHCTL_FAIL_ONCE_STATE="$launchctl_fail_once" "${service_start_env[@]}" "$utility" services start --map "$service_map" herdr 2>&1)"; then fail 'Replacement bootstrap failure was accepted.'; fi
+contains 'Could not bootstrap brew-port service herdr. The prior configuration was restored.' "$output"
+grep -Fq '<string>--updated</string>' "$herdr_plist" || fail 'Bootstrap failure did not restore the prior plist.'
+not_contains '<string>--not-loaded</string>' "$(cat "$herdr_plist")"
+grep -Fxq dev.brew-port.herdr "$homebrew_labels" || fail 'Bootstrap failure did not restore the prior service.'
+
+if output="$(env MOCK_LAUNCHCTL_BOOTOUT_FAIL=1 "${service_start_env[@]}" "$utility" services start --map "$service_map" herdr 2>&1)"; then fail 'Repeated service start accepted a failed reload.'; fi
+contains "Could not reload brew-port service herdr. The existing job and plist remain in place at $herdr_plist." "$output"
+grep -Fq '<string>--updated</string>' "$herdr_plist" || fail 'Failed service reload replaced its active plist.'
+not_contains '<string>--not-loaded</string>' "$(cat "$herdr_plist")"
+
+: >"$active_ports"
+: >"$sudo_log"
+: >"$launchctl_log"
+colima_plist="$HOME/Library/LaunchAgents/dev.brew-port.colima.plist"
+output="$(env "${service_start_env[@]}" "$utility" services start --dry-run --map "$service_map" colima)"
+contains 'Would install MacPorts port colima (for service colima)' "$output"
+contains 'Would write and bootstrap' "$output"
+[ ! -e "$colima_plist" ] || fail 'Dry-run wrote a service plist.'
+[ ! -s "$sudo_log" ] || fail 'Dry-run service start used sudo.'
+not_contains 'bootstrap' "$(cat "$launchctl_log")"
+
+printf '%s\n' sh.brew.atuin >"$homebrew_labels"
+if output="$(env "${service_start_env[@]}" "$utility" services start --dry-run --map "$service_map" atuin 2>&1)"; then fail 'Active Homebrew service was not rejected.'; fi
+contains 'Homebrew service sh.brew.atuin is active.' "$output"
+printf '%s\n' homebrew.mxcl.atuin >"$homebrew_labels"
+if output="$(env "${service_start_env[@]}" "$utility" services start --dry-run --map "$service_map" atuin 2>&1)"; then fail 'Legacy Homebrew service label was not rejected.'; fi
+contains 'Homebrew service homebrew.mxcl.atuin is active.' "$output"
+printf '%s\n' org.example.herdr >"$homebrew_labels"
+if output="$(env "${service_start_env[@]}" "$utility" services start --dry-run --map "$service_map" herdr 2>&1)"; then fail 'Explicit Homebrew service label was not rejected.'; fi
+contains 'Homebrew service org.example.herdr is active.' "$output"
+: >"$homebrew_labels"
+
+override_working_directory="$tmp_dir/service-working-directory"
+mkdir "$override_working_directory"
+mkdir -p "$custom_port_prefix/bin"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$custom_port_prefix/bin/atuin-local"
+chmod +x "$custom_port_prefix/bin/atuin-local"
+service_file_temporary="$tmp_dir/services-with-overrides.json"
+"$custom_port_bin/jq" --arg workdir "$override_working_directory" --arg xml_environment "$xml_metacharacters" '
+  .services |= map(if .token == "atuin" then .overrides = {
+    executable: "bin/atuin-local",
+    arguments: ["daemon", "start", "--verbose"],
+    keep_alive: {successful_exit: false},
+    environment: {ATUIN_LOG: $xml_environment},
+    working_directory: $workdir,
+    stdout_path: "/tmp/atuin-out.log",
+    stderr_path: "/tmp/atuin-err.log"
+  } else . end)
+' "$service_file" >"$service_file_temporary"
+mv "$service_file_temporary" "$service_file"
+printf '%s\n' atuin >"$active_ports"
+atuin_plist="$HOME/Library/LaunchAgents/dev.brew-port.atuin.plist"
+env "${service_start_env[@]}" "$utility" services start --map "$service_map" atuin >/dev/null
+grep -Fq "<string>$custom_port_prefix/bin/atuin-local</string>" "$atuin_plist" || fail 'Executable override was ignored.'
+grep -Fq '<string>--verbose</string>' "$atuin_plist" || fail 'Argument override was ignored.'
+grep -Fq "<key>ATUIN_LOG</key><string>$xml_escaped</string>" "$atuin_plist" || fail 'Environment override was not preserved and XML escaped.'
+grep -Fq "<string>$override_working_directory</string>" "$atuin_plist" || fail 'Working-directory override was ignored.'
+grep -Fq '<key>SuccessfulExit</key><false/>' "$atuin_plist" || fail 'Keep-alive override was ignored.'
+grep -Fq '<string>/tmp/atuin-out.log</string>' "$atuin_plist" || fail 'Log-path override was ignored.'
+
+printf '%s\n' colima >"$active_ports"
+mkdir -p "$custom_port_prefix/bin"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$custom_port_prefix/bin/colima"
+chmod +x "$custom_port_prefix/bin/colima"
+printf '%s\n' 'old plist must survive invalid validation' >"$colima_plist"
+if output="$(env MOCK_PLUTIL_FAIL=1 "${service_start_env[@]}" "$utility" services start --map "$service_map" colima 2>&1)"; then fail 'Invalid plist was accepted.'; fi
+contains "Generated plist is invalid: $colima_plist" "$output"
+grep -Fqx 'old plist must survive invalid validation' "$colima_plist" || fail 'Invalid plist replaced an existing plist.'
+
+homebrew_plist="$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist"
+printf '%s\n' 'Homebrew-owned plist' >"$homebrew_plist"
+: >"$launchctl_log"
+env "${service_start_env[@]}" "$utility" services stop herdr >/dev/null
+[ ! -e "$herdr_plist" ] || fail 'Service stop did not remove the owned plist.'
+[ -f "$homebrew_plist" ] || fail 'Service stop touched a Homebrew-owned plist.'
+"$custom_port_bin/jq" -e '.services[] | select(.token == "herdr")' "$service_file" >/dev/null || fail 'Service stop removed its saved definition.'
+grep -Fqx "bootout gui/$UID $herdr_plist" "$launchctl_log" || fail 'Service stop did not boot out the owned plist.'
+
+printf '%s\n' 'loaded plist must survive failed bootout' >"$herdr_plist"
+printf '%s\n' dev.brew-port.herdr >"$homebrew_labels"
+if output="$(env MOCK_LAUNCHCTL_BOOTOUT_FAIL=1 "${service_start_env[@]}" "$utility" services stop herdr 2>&1)"; then fail 'Loaded service was accepted after bootout failed.'; fi
+contains "Could not boot out brew-port service herdr. The plist remains at $herdr_plist." "$output"
+[ -f "$herdr_plist" ] || fail 'Failed bootout removed the loaded service plist.'
+
+: >"$homebrew_labels"
+env MOCK_LAUNCHCTL_BOOTOUT_FAIL=1 "${service_start_env[@]}" "$utility" services stop herdr >/dev/null
+[ ! -e "$herdr_plist" ] || fail 'Unloaded service plist was not removed after failed bootout.'
+
+printf '%s\n' 'dry-run plist' >"$herdr_plist"
+env "${service_start_env[@]}" "$utility" services stop --dry-run herdr >/dev/null
+[ -f "$herdr_plist" ] || fail 'Dry-run service stop removed a plist.'
+
+printf '%s\n' '{"version":1,"services":[{"token":"bad"}]}' >"$service_file"
+if output="$(env "${service_start_env[@]}" "$utility" services stop --dry-run herdr 2>&1)"; then fail 'Malformed service definitions were accepted.'; fi
+contains "Invalid service definition file: $service_file" "$output"
 
 release_dir="$tmp_dir/release"
 mkdir -p "$release_dir/bin"

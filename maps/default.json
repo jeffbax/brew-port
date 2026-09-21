@@ -4,6 +4,27 @@
   "mappings": [
     {
       "kind": "brew",
+      "token": "atuin",
+      "action": "port",
+      "target": "atuin",
+      "note": "Use the MacPorts executable after checking daemon-state compatibility."
+    },
+    {
+      "kind": "brew",
+      "token": "colima",
+      "action": "port",
+      "target": "colima",
+      "note": "Review start -f and the user-managed runtime before use."
+    },
+    {
+      "kind": "brew",
+      "token": "herdr",
+      "action": "port",
+      "target": "herdr",
+      "note": "Use the MacPorts executable after reviewing its service arguments."
+    },
+    {
+      "kind": "brew",
       "token": "asmvik/formulae/skhd",
       "action": "port",
       "target": "skhd",

@@ -68,6 +68,37 @@ Mac App Store declarations are scanned, validated, and installed in batches. Exp
 
 Fallback maps declare their verified architectures and bundled installers choose matching release assets. MAS uses its matching arm64 or x86_64 package. signal-cli uses its official bundle (which contains matching macOS libsignal slices) and installs MacPorts OpenJDK 25 under the active sudo lease.
 
+## User services
+
+`brew-port services` is an alpha, proof-of-concept feature. Its user-service translation and lifecycle behavior are still being validated; review every definition and retain a separate recovery path. It imports a reviewed snapshot of a Homebrew/core formula's public Formulae API metadata. It never calls the `brew` CLI, `port load`, or a MacPorts-owned launchd plist. Imports only support immediate user services whose `run` command is an argument array and whose keep-alive policy is `always` or `successful_exit`.
+
+```sh
+bin/brew-port services import-homebrew [--map ./service-mappings.json] FORMULA...
+bin/brew-port services list
+bin/brew-port services start [--dry-run] [--map ./service-mappings.json] TOKEN...
+bin/brew-port services stop [--dry-run] TOKEN...
+```
+
+Import writes a disabled, versioned snapshot to `${XDG_CONFIG_HOME:-~/.config}/brew-port/services.json`; it never starts a service. The snapshot records the Formulae API version and date, mapped MacPorts port, a MacPorts-prefix-relative executable, arguments, keep-alive policy, environment, working directory, and an empty `overrides` object. Its format is defined by [services.schema.json](maps/services.schema.json).
+
+Only the documented `$HOMEBREW_PREFIX` and `$HOME` placeholders are translated. Homebrew's `opt/FORMULA/` executable path becomes a path below the detected MacPorts prefix; unsupported placeholders, run types, paths, and service fields are rejected. A later local override can change `executable` (still relative to the MacPorts prefix), `arguments`, `environment`, `working_directory`, `keep_alive`, `stdout_path`, or `stderr_path`.
+
+Starting first checks for active Homebrew labels (`sh.brew.TOKEN`, `homebrew.mxcl.TOKEN`, and a metadata label when present), then installs the mapped port if necessary, verifies the translated executable, atomically validates and writes `~/Library/LaunchAgents/dev.brew-port.TOKEN.plist`, and bootstraps it in `gui/$UID`. No shell is used to execute imported commands. The default logs are `${XDG_STATE_HOME:-~/.local/state}/brew-port/services/TOKEN.log` and `TOKEN.err.log`. `stop` bootouts and removes only that `dev.brew-port.*` plist; it keeps the port and saved definition.
+
+`services list` is read-only. It reports each imported definition in a compact section with its formula and currently mapped MacPorts port, resolved MacPorts executable (`found` or `missing`), a friendly LaunchAgent state plus raw launchd state, labeled PID and last exit code, and independent stdout/stderr status (`present`, `empty`, `missing`, or `unavailable`) with configured paths and latest non-empty lines. It does not fetch metadata, install ports, start services, or create log files.
+
+Homebrew and MacPorts may package different versions or executable layouts. A version mismatch produces a warning; a missing translated executable blocks startup until its local `overrides.executable` is reviewed and corrected. Always inspect an import before `start`, especially arguments, environment variables, and working directory.
+
+The bundled map currently provides reviewed port mappings for `herdr`, `atuin`, and `colima`, so no service mapping file is needed for these formulas:
+
+```sh
+bin/brew-port services import-homebrew herdr atuin colima
+${PAGER:-less} "${XDG_CONFIG_HOME:-$HOME/.config}/brew-port/services.json"
+bin/brew-port services start herdr atuin colima
+```
+
+The example mappings are names to review, not a claim that matching versions or paths are interchangeable. In particular, `colima`'s `start -f` creates a user-managed runtime. Import does not migrate service state or credentials. Stop the existing Homebrew service manually before starting the brew-port-owned replacement.
+
 ## Completions
 
 ```sh
