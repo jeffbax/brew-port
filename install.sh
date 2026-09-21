@@ -70,7 +70,7 @@ install_release() {
 	fi
 	printf 'Installed brew-port %s in %s\n' "$version" "$destination"
 	printf 'Add %s to PATH if needed.\n' "$prefix/bin"
-	printf 'Optional completions: brew-port completion install fish|bash|zsh\n'
+	printf 'Optional completions: brew-port completion install [bash|fish|zsh]\n'
 }
 
 if [ -n "$release_dir" ]; then

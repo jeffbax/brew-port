@@ -81,6 +81,8 @@ fi
 mkdir "$tmp_dir/extracted"
 tar -xzf "$tmp_dir/download/brew-port-$version.tar.gz" -C "$tmp_dir/extracted"
 release_dir="$tmp_dir/extracted/brew-port-$version"
+[ -f "$release_dir/README.md" ] || fail 'Release archive omitted the README.'
+grep -Fq 'https://github.com/jeffbax/brew-port/blob/main/docs/installation.md' "$release_dir/README.md" || fail 'Packaged README does not link to repository documentation.'
 mkdir "$tmp_dir/offline"
 for command_name in sudo curl port jq; do
 	# Literal mock body records any forbidden installer dependency.

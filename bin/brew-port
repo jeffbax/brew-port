@@ -22,6 +22,10 @@ source "$BP_BIN_DIR/lib/brew-port/fallbacks.bash"
 
 BP_VERSION=0.1.0-rc.1
 BP_DRY_RUN=false
+BP_COMPLETION_STARTUPS=()
+BP_COMPLETION_MARKER='# brew-port completion (managed)'
+BP_COMPLETION_BLOCK_START='# >>> brew-port completion >>>'
+BP_COMPLETION_BLOCK_END='# <<< brew-port completion <<<'
 
 usage() {
 	cat <<'EOF'
@@ -30,20 +34,116 @@ Usage:
   brew-port update [--dry-run] [--map FILE ...]
   brew-port refresh-fallbacks [--dry-run] [--map FILE ...]
   brew-port doctor
-  brew-port version
+  brew-port version | --version | -V
   brew-port map init | validate [--map FILE ...] | explain KIND TOKEN [--map FILE ...]
   brew-port completion SHELL
-  brew-port completion install SHELL
+  brew-port completion install [SHELL]
+  brew-port completion uninstall [SHELL]
+  brew-port help [COMMAND [SUBCOMMAND]]
 
 Mapping layers are bundled defaults, $XDG_CONFIG_HOME/brew-port/mappings.json,
 then each --map file in order. BREW_PORT_PORT_BIN selects a non-default port.
 EOF
 }
 
-parse_common_options() {
+usage_command() {
+	case "$1" in
+	install)
+		cat <<'EOF'
+Usage: brew-port install [--dry-run] [--map FILE ...] BREWFILE...
+
+Translate Brewfile declarations to MacPorts actions. --dry-run performs no writes,
+downloads, package installs, or sudo calls.
+EOF
+		;;
+	update)
+		cat <<'EOF'
+Usage: brew-port update [--dry-run] [--map FILE ...]
+
+Selfupdate and upgrade MacPorts, then refresh managed fallbacks. This does not
+upgrade the brew-port CLI itself.
+EOF
+		;;
+	refresh-fallbacks)
+		cat <<'EOF'
+Usage: brew-port refresh-fallbacks [--dry-run] [--map FILE ...]
+
+Refresh fallbacks recorded by earlier Brewfile installations.
+EOF
+		;;
+	doctor)
+		printf '%s\n' 'Usage: brew-port doctor' '' 'Report macOS, MacPorts, jq, mapping, and fallback compatibility status.'
+		;;
+	version)
+		printf '%s\n' 'Usage: brew-port version | brew-port --version | brew-port -V' '' 'Print the installed brew-port version.'
+		;;
+	map)
+		cat <<'EOF'
+Usage:
+  brew-port map init
+  brew-port map validate [--map FILE ...]
+  brew-port map explain [--map FILE ...] KIND TOKEN
+
+Create, validate, and inspect layered mapping overrides.
+EOF
+		;;
+	map-init)
+		printf '%s\n' 'Usage: brew-port map init' '' 'Create the default user mapping file and its fallbacks directory.'
+		;;
+	map-validate)
+		printf '%s\n' 'Usage: brew-port map validate [--map FILE ...]' '' 'Validate bundled, user, and supplied mapping files without changing packages.'
+		;;
+	map-explain)
+		printf '%s\n' 'Usage: brew-port map explain [--map FILE ...] KIND TOKEN' '' 'Show the effective mapping and its source for one Brewfile declaration.'
+		;;
+	completion)
+		cat <<'EOF'
+Usage:
+  brew-port completion SHELL
+  brew-port completion install [SHELL]
+  brew-port completion uninstall [SHELL]
+
+Print, install, or remove Bash, Fish, or Zsh completion. Install and uninstall
+infer the current shell when SHELL is omitted.
+EOF
+		;;
+	completion-install)
+		printf '%s\n' 'Usage: brew-port completion install [bash|fish|zsh]' '' 'Install completion and activate it for future shells.'
+		;;
+	completion-uninstall)
+		printf '%s\n' 'Usage: brew-port completion uninstall [bash|fish|zsh]' '' 'Remove only brew-port-owned completion files and startup blocks.'
+		;;
+	*) bp_die "Unknown help topic: $1" ;;
+	esac
+}
+
+help_command() {
+	case "$#" in
+	0) usage ;;
+	1) usage_command "$1" ;;
+	2)
+		case "$1" in
+		map)
+			case "$2" in init | validate | explain) usage_command "map-$2" ;; *) bp_die "Unknown map command: $2" ;; esac
+			;;
+		completion)
+			case "$2" in install | uninstall) usage_command "completion-$2" ;; *) bp_die "Unknown completion command: $2" ;; esac
+			;;
+		*) bp_die 'Only map and completion have subcommands. Run brew-port help for available commands.' ;;
+		esac
+		;;
+	*) bp_die 'Usage: brew-port help [COMMAND [SUBCOMMAND]]' ;;
+	esac
+}
+
+parse_options() {
+	local help_topic="$1" allow_dry_run="$2"
+	shift 2
+	BP_REMAINING=()
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 		--dry-run)
+			[ "$allow_dry_run" = true ] || bp_die "--dry-run is not supported by brew-port $help_topic"
 			BP_DRY_RUN=true
 			shift
 			;;
@@ -53,17 +153,21 @@ parse_common_options() {
 			shift 2
 			;;
 		--help | -h)
-			usage
+			usage_command "$help_topic"
 			exit 0
+			;;
+		--)
+			shift
+			BP_REMAINING+=("$@")
+			return 0
 			;;
 		--*) bp_die "Unknown option: $1" ;;
 		*)
-			BP_REMAINING=("$@")
-			return 0
+			BP_REMAINING+=("$1")
+			shift
 			;;
 		esac
 	done
-	BP_REMAINING=()
 }
 
 prepare_maps() {
@@ -88,7 +192,7 @@ prepare_mutating() {
 }
 
 install_command() {
-	parse_common_options "$@"
+	parse_options install true "$@"
 	[ "${#BP_REMAINING[@]}" -gt 0 ] || bp_die 'At least one Brewfile is required.'
 	local brewfile
 	for brewfile in "${BP_REMAINING[@]}"; do [ -f "$brewfile" ] || bp_die "Brewfile does not exist: $brewfile"; done
@@ -98,7 +202,7 @@ install_command() {
 }
 
 update_command() {
-	parse_common_options "$@"
+	parse_options update true "$@"
 	[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'update does not accept Brewfiles.'
 	prepare_mutating
 	bp_selfupdate
@@ -113,7 +217,7 @@ update_command() {
 }
 
 refresh_command() {
-	parse_common_options "$@"
+	parse_options refresh-fallbacks true "$@"
 	[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'refresh-fallbacks does not accept Brewfiles.'
 	prepare_mutating
 	bp_selfupdate
@@ -122,7 +226,15 @@ refresh_command() {
 }
 
 doctor_command() {
-	[ "$#" -eq 0 ] || bp_die 'doctor does not accept options.'
+	case "${1:-}" in
+	'') ;;
+	--help | -h)
+		[ "$#" -eq 1 ] || bp_die 'doctor does not accept additional arguments.'
+		usage_command doctor
+		return
+		;;
+	*) bp_die 'doctor does not accept options.' ;;
+	esac
 	bp_detect_host
 	bp_find_port
 	bp_find_jq
@@ -156,12 +268,31 @@ EOF
 
 map_command() {
 	local subcommand="${1:-}"
-	[ -n "$subcommand" ] || bp_die 'map requires init, validate, or explain.'
+	case "$subcommand" in
+	'')
+		[ "$#" -eq 0 ] || bp_die 'map does not accept additional arguments without a subcommand.'
+		usage_command map
+		return
+		;;
+	--help | -h)
+		[ "$#" -eq 1 ] || bp_die 'map does not accept additional arguments without a subcommand.'
+		usage_command map
+		return
+		;;
+	esac
 	shift
 	bp_init_maps
 	case "$subcommand" in
 	init)
-		[ "$#" -eq 0 ] || bp_die 'map init does not accept options.'
+		case "${1:-}" in
+		'') ;;
+		--help | -h)
+			[ "$#" -eq 1 ] || bp_die 'map init does not accept additional arguments.'
+			usage_command map-init
+			return
+			;;
+		*) bp_die 'map init does not accept options.' ;;
+		esac
 		local parent
 		parent="$(dirname "$BP_USER_MAP")"
 		[ ! -e "$BP_USER_MAP" ] || bp_die "Mapping file already exists: $BP_USER_MAP"
@@ -170,7 +301,7 @@ map_command() {
 		bp_log "Created $BP_USER_MAP and $parent/fallbacks/."
 		;;
 	validate)
-		parse_common_options "$@"
+		parse_options map-validate false "$@"
 		[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'map validate accepts only --map.'
 		BP_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/brew-port.XXXXXX")"
 		trap bp_cleanup EXIT HUP INT TERM
@@ -178,11 +309,9 @@ map_command() {
 		bp_log 'Mappings are valid.'
 		;;
 	explain)
-		[ "$#" -ge 2 ] || bp_die 'Usage: brew-port map explain KIND TOKEN [--map FILE ...]'
-		local kind="$1" token="$2"
-		shift 2
-		parse_common_options "$@"
-		[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'Unexpected map explain argument.'
+		parse_options map-explain false "$@"
+		[ "${#BP_REMAINING[@]}" -eq 2 ] || bp_die 'Usage: brew-port map explain [--map FILE ...] KIND TOKEN'
+		local kind="${BP_REMAINING[0]}" token="${BP_REMAINING[1]}"
 		BP_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/brew-port.XXXXXX")"
 		trap bp_cleanup EXIT HUP INT TERM
 		prepare_maps
@@ -192,36 +321,208 @@ map_command() {
 	esac
 }
 
-completion_command() {
-	local install=false shell="${1:-}"
-	[ -n "$shell" ] || bp_die 'completion requires a shell.'
-	if [ "$shell" = install ]; then
-		install=true
-		shell="${2:-}"
-		[ -n "$shell" ] || bp_die 'completion install requires a shell.'
-		[ "$#" -eq 2 ] || bp_die 'Unexpected completion argument.'
-	else [ "$#" -eq 1 ] || bp_die 'Unexpected completion argument.'; fi
-	local source_file destination
-	case "$shell" in
+completion_shell() {
+	BP_COMPLETION_SHELL="$1"
+	BP_COMPLETION_STARTUPS=()
+	if [ -z "$BP_COMPLETION_SHELL" ]; then
+		BP_COMPLETION_SHELL="${SHELL:-}"
+		BP_COMPLETION_SHELL="${BP_COMPLETION_SHELL##*/}"
+	fi
+	case "$BP_COMPLETION_SHELL" in
 	bash)
-		source_file="$BP_REPO_DIR/completions/brew-port.bash"
-		destination="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/brew-port"
+		BP_COMPLETION_SOURCE="$BP_REPO_DIR/completions/brew-port.bash"
+		BP_COMPLETION_DESTINATION="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/brew-port"
+		BP_COMPLETION_STARTUPS=("$HOME/.bashrc")
+		for BP_COMPLETION_LOGIN_STARTUP in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+			if [ -e "$BP_COMPLETION_LOGIN_STARTUP" ]; then
+				BP_COMPLETION_STARTUPS+=("$BP_COMPLETION_LOGIN_STARTUP")
+				break
+			fi
+		done
+		[ "${#BP_COMPLETION_STARTUPS[@]}" -gt 1 ] || BP_COMPLETION_STARTUPS+=("$HOME/.bash_profile")
+		# shellcheck disable=SC2016 # Expand XDG_DATA_HOME when a future shell sources this block.
+		BP_COMPLETION_STARTUP_BODY='source "${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/brew-port"'
+		# shellcheck disable=SC2016 # .profile can be read by POSIX shells that do not support source.
+		BP_COMPLETION_PROFILE_BODY=$'if [ -n "${BASH_VERSION:-}" ]; then\n  source "${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/brew-port"\nfi'
 		;;
 	fish)
-		source_file="$BP_REPO_DIR/completions/brew-port.fish"
-		destination="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/brew-port.fish"
+		BP_COMPLETION_SOURCE="$BP_REPO_DIR/completions/brew-port.fish"
+		BP_COMPLETION_DESTINATION="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/brew-port.fish"
+		BP_COMPLETION_STARTUP_BODY=''
 		;;
 	zsh)
-		source_file="$BP_REPO_DIR/completions/brew-port.zsh"
-		destination="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/completions/_brew-port"
+		BP_COMPLETION_SOURCE="$BP_REPO_DIR/completions/brew-port.zsh"
+		BP_COMPLETION_DESTINATION="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/completions/_brew-port"
+		BP_COMPLETION_STARTUPS=("${ZDOTDIR:-$HOME}/.zshrc")
+		BP_COMPLETION_STARTUP_BODY=$'fpath=("${XDG_DATA_HOME:-$HOME/.local/share}/zsh/completions" $fpath)\nautoload -Uz compinit\ncompinit'
 		;;
-	*) bp_die "Unsupported shell: $shell (use bash, fish, or zsh)" ;;
+	*) bp_die "Unsupported shell: $BP_COMPLETION_SHELL (use bash, fish, or zsh)" ;;
 	esac
-	if "$install"; then
-		mkdir -p "$(dirname "$destination")"
-		cp "$source_file" "$destination"
-		bp_log "Installed $shell completion: $destination"
-	else cat "$source_file"; fi
+}
+
+completion_marker_count() {
+	if [ -f "$2" ]; then grep -Fxc -- "$1" "$2" || true; else printf '%s\n' 0; fi
+}
+
+completion_block_status() {
+	local startup="$1" starts ends start_line end_line
+	starts="$(completion_marker_count "$BP_COMPLETION_BLOCK_START" "$startup")"
+	ends="$(completion_marker_count "$BP_COMPLETION_BLOCK_END" "$startup")"
+	case "$starts:$ends" in
+	0:0) printf '%s\n' absent ;;
+	1:1)
+		start_line="$(grep -Fnx -- "$BP_COMPLETION_BLOCK_START" "$startup" | cut -d: -f1)"
+		end_line="$(grep -Fnx -- "$BP_COMPLETION_BLOCK_END" "$startup" | cut -d: -f1)"
+		if [ "$start_line" -lt "$end_line" ]; then printf '%s\n' managed; else printf '%s\n' malformed; fi
+		;;
+	*) printf '%s\n' malformed ;;
+	esac
+}
+
+completion_require_valid_startup() {
+	local startup="$1"
+	[ "$(completion_block_status "$startup")" != malformed ] || bp_die "Refusing to modify malformed brew-port completion block: $startup"
+}
+
+completion_replace_startup() {
+	local temporary="$1" startup="$2"
+	if [ -L "$startup" ]; then
+		# Moving over a symlink replaces the link; copy through it so the target is updated.
+		cp "$temporary" "$startup"
+		rm "$temporary"
+	else
+		mv "$temporary" "$startup"
+	fi
+}
+
+completion_startup_body() {
+	if [ "$BP_COMPLETION_SHELL" = bash ] && [ "$1" = "$HOME/.profile" ]; then
+		printf '%s\n' "$BP_COMPLETION_PROFILE_BODY"
+	else
+		printf '%s\n' "$BP_COMPLETION_STARTUP_BODY"
+	fi
+}
+
+completion_update_startup() {
+	local startup="$1" body="$2" status temporary
+	[ -n "$startup" ] || return 0
+	status="$(completion_block_status "$startup")"
+	case "$status" in
+	absent | managed) ;;
+	malformed) bp_die "Refusing to modify malformed brew-port completion block: $startup" ;;
+	esac
+	mkdir -p "$(dirname -- "$startup")"
+	temporary="$(mktemp "${startup}.XXXXXX")"
+	if [ "$status" = managed ]; then
+		awk -v start="$BP_COMPLETION_BLOCK_START" -v end="$BP_COMPLETION_BLOCK_END" '
+      $0 == start { skip = 1; next }
+      $0 == end { skip = 0; next }
+      !skip { print }
+    ' "$startup" >"$temporary"
+	elif [ -f "$startup" ]; then cp "$startup" "$temporary"; fi
+	if [ -s "$temporary" ]; then printf '\n' >>"$temporary"; fi
+	printf '%s\n%s\n%s\n' "$BP_COMPLETION_BLOCK_START" "$body" "$BP_COMPLETION_BLOCK_END" >>"$temporary"
+	completion_replace_startup "$temporary" "$startup"
+}
+
+completion_remove_startup() {
+	local startup="$1" status temporary
+	[ -n "$startup" ] && [ -f "$startup" ] || return 0
+	status="$(completion_block_status "$startup")"
+	case "$status" in
+	absent) return 0 ;;
+	managed) ;;
+	malformed) bp_die "Refusing to modify malformed brew-port completion block: $startup" ;;
+	esac
+	temporary="$(mktemp "${startup}.XXXXXX")"
+	awk -v start="$BP_COMPLETION_BLOCK_START" -v end="$BP_COMPLETION_BLOCK_END" '
+    $0 == start { skip = 1; next }
+    $0 == end { skip = 0; next }
+    !skip { print }
+  ' "$startup" >"$temporary"
+	completion_replace_startup "$temporary" "$startup"
+}
+
+completion_is_legacy() {
+	case "$BP_COMPLETION_SHELL" in
+	bash)
+		grep -Fqx -- '_brew_port() {' "$1" &&
+			grep -Fq -- "commands='install update refresh-fallbacks doctor version map completion'" "$1" &&
+			grep -Fqx -- 'complete -F _brew_port brew-port' "$1"
+		;;
+	fish)
+		grep -Fqx -- "complete -c brew-port -f -n '__fish_use_subcommand' -a 'install update refresh-fallbacks doctor version map completion'" "$1" &&
+			grep -Fq -- "__fish_seen_subcommand_from completion" "$1"
+		;;
+	zsh)
+		grep -Fqx -- '#compdef brew-port' "$1" &&
+			grep -Fqx -- '_brew_port() {' "$1" &&
+			grep -Fqx -- "    'completion:print or install completion'" "$1"
+		;;
+	*) return 1 ;;
+	esac
+}
+
+completion_is_owned() {
+	grep -Fqx -- "$BP_COMPLETION_MARKER" "$1" 2>/dev/null || completion_is_legacy "$1"
+}
+
+completion_install() {
+	[ ! -e "$BP_COMPLETION_DESTINATION" ] || completion_is_owned "$BP_COMPLETION_DESTINATION" || bp_die "Refusing to replace non-brew-port completion: $BP_COMPLETION_DESTINATION"
+	local startup
+	if [ "${#BP_COMPLETION_STARTUPS[@]}" -gt 0 ]; then
+		for startup in "${BP_COMPLETION_STARTUPS[@]}"; do completion_require_valid_startup "$startup"; done
+	fi
+	mkdir -p "$(dirname -- "$BP_COMPLETION_DESTINATION")"
+	cp "$BP_COMPLETION_SOURCE" "$BP_COMPLETION_DESTINATION"
+	if [ "${#BP_COMPLETION_STARTUPS[@]}" -gt 0 ]; then
+		for startup in "${BP_COMPLETION_STARTUPS[@]}"; do completion_update_startup "$startup" "$(completion_startup_body "$startup")"; done
+	fi
+	bp_log "Installed $BP_COMPLETION_SHELL completion: $BP_COMPLETION_DESTINATION"
+	[ "${#BP_COMPLETION_STARTUPS[@]}" -eq 0 ] || bp_log "Restart your shell to load completion from ${BP_COMPLETION_STARTUPS[*]}."
+}
+
+completion_uninstall() {
+	local startup
+	if [ "${#BP_COMPLETION_STARTUPS[@]}" -gt 0 ]; then
+		for startup in "${BP_COMPLETION_STARTUPS[@]}"; do completion_require_valid_startup "$startup"; done
+	fi
+	if [ -e "$BP_COMPLETION_DESTINATION" ]; then
+		completion_is_owned "$BP_COMPLETION_DESTINATION" || bp_die "Refusing to remove non-brew-port completion: $BP_COMPLETION_DESTINATION"
+		rm "$BP_COMPLETION_DESTINATION"
+	fi
+	if [ "${#BP_COMPLETION_STARTUPS[@]}" -gt 0 ]; then
+		for startup in "${BP_COMPLETION_STARTUPS[@]}"; do completion_remove_startup "$startup"; done
+	fi
+	bp_log "Removed $BP_COMPLETION_SHELL completion."
+}
+
+completion_command() {
+	local action="${1:-}" shell=''
+	case "$action" in
+	--help | -h | '')
+		[ "$#" -le 1 ] || bp_die 'completion does not accept additional arguments without an action.'
+		usage_command completion
+		return
+		;;
+	install | uninstall)
+		if [ "${2:-}" = --help ] || [ "${2:-}" = -h ]; then
+			[ "$#" -eq 2 ] || bp_die "completion $action does not accept additional arguments."
+			usage_command "completion-$action"
+			return
+		fi
+		[ "$#" -le 2 ] || bp_die "Usage: brew-port completion $action [bash|fish|zsh]"
+		shell="${2:-}"
+		completion_shell "$shell"
+		"completion_$action"
+		;;
+	bash | fish | zsh)
+		[ "$#" -eq 1 ] || bp_die 'Usage: brew-port completion SHELL'
+		completion_shell "$action"
+		cat "$BP_COMPLETION_SOURCE"
+		;;
+	*) bp_die "Unsupported shell or completion action: $action" ;;
+	esac
 }
 
 [ "$#" -gt 0 ] || {
@@ -238,14 +539,27 @@ install) install_command "$@" ;;
 update) update_command "$@" ;;
 refresh-fallbacks) refresh_command "$@" ;;
 doctor) doctor_command "$@" ;;
-version)
-	[ "$#" -eq 0 ] || bp_die 'version does not accept options.'
+version | --version | -V)
+	case "${1:-}" in
+	'') ;;
+	--help | -h)
+		[ "$#" -eq 1 ] || bp_die 'version does not accept additional arguments.'
+		usage_command version
+		exit 0
+		;;
+	*) bp_die 'version does not accept options.' ;;
+	esac
 	bp_log "brew-port $BP_VERSION"
 	;;
 map) map_command "$@" ;;
 completion) completion_command "$@" ;;
---help | -h | help) usage ;;
+help) help_command "$@" ;;
+--help | -h)
+	[ "$#" -eq 0 ] || bp_die 'Run brew-port help COMMAND for command-specific help.'
+	usage
+	;;
 *)
+	bp_log "Unknown command: $command_name" >&2
 	usage >&2
 	exit 1
 	;;

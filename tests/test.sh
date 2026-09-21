@@ -22,6 +22,12 @@ fail() {
 }
 contains() { [[ "$2" == *"$1"* ]] || fail "Expected output to contain: $1"; }
 not_contains() { [[ "$2" != *"$1"* ]] || fail "Expected output not to contain: $1"; }
+has_candidate() {
+	local expected="$1" candidate
+	shift
+	for candidate in "$@"; do [ "$candidate" = "$expected" ] && return 0; done
+	return 1
+}
 
 mock_uname="$tmp_dir/uname"
 mock_port="$tmp_dir/port"
@@ -109,11 +115,21 @@ command -v "$shfmt_bin" >/dev/null || fail 'shfmt is required to run the checks.
 [ ! -e "$repo_dir/bin/macports-brewfile" ] || fail 'The old CLI must not remain.'
 [ -f "$repo_dir/.agents/skills/brew-port/SKILL.md" ] || fail 'Missing agent skill.'
 "$utility" map validate | grep -Fq 'Mappings are valid.'
+[ "$("$utility" --version)" = "$("$utility" version)" ] || fail '--version did not match version.'
+"$utility" help map explain | grep -Fq 'Usage: brew-port map explain'
+"$utility" help completion install | grep -Fq 'Usage: brew-port completion install'
+"$utility" help completion uninstall | grep -Fq 'Usage: brew-port completion uninstall'
+"$utility" map --help | grep -Fq 'brew-port map validate'
+"$utility" completion install --help | grep -Fq 'Install completion and activate it'
+if output="$("$utility" not-a-command 2>&1)"; then fail 'Unknown command unexpectedly succeeded.'; fi
+contains 'Unknown command: not-a-command' "$output"
 prefix_brewfile="$tmp_dir/custom-prefix.Brewfile"
 printf '%s\n' 'brew "git"' >"$prefix_brewfile"
 : >"$jq_log"
 MOCK_ARCH=arm64 MOCK_JQ_LOG="$jq_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$custom_port_bin/port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$prefix_brewfile" >/dev/null
 [ -s "$jq_log" ] || fail 'The selected MacPorts prefix jq was not used.'
+MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$prefix_brewfile" --dry-run >/dev/null
+MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install -- "$prefix_brewfile" >/dev/null
 linked_bin="$tmp_dir/linked-bin"
 mkdir -p "$linked_bin"
 ln -s "$utility" "$linked_bin/brew-port"
@@ -310,7 +326,7 @@ printf '%s\n' '#!/usr/bin/env bash' >"$outside_fallback"
 chmod +x "$outside_fallback"
 ln -s "$outside_fallback" "$map_dir/fallbacks/escaped-tool.sh"
 "$utility" map validate --map "$local_map" >/dev/null
-output="$("$utility" map explain brew git --map "$local_map")"
+output="$("$utility" map explain --map "$local_map" brew git)"
 contains 'skip' "$output"
 contains 'local override' "$output"
 
@@ -459,6 +475,202 @@ contains 'jq is required' "$output"
 "$utility" completion install fish >/dev/null
 [ -f "$XDG_CONFIG_HOME/fish/completions/brew-port.fish" ] || fail 'Fish completion was not installed.'
 "$utility" completion bash | grep -Fq 'complete -F _brew_port brew-port'
+source "$repo_dir/completions/brew-port.bash"
+COMP_WORDS=(brew-port map '')
+COMP_CWORD=2
+_brew_port
+contains explain "${COMPREPLY[*]}"
+COMP_WORDS=(brew-port completion uninstall '')
+COMP_CWORD=3
+_brew_port
+contains zsh "${COMPREPLY[*]}"
+COMP_WORDS=(brew-port help completion '')
+COMP_CWORD=3
+_brew_port
+contains install "${COMPREPLY[*]}"
+completion_path_dir="$tmp_dir/completion-paths"
+mkdir -p "$completion_path_dir"
+touch "$completion_path_dir/Brewfile"
+touch "$completion_path_dir/My Brewfile" "$completion_path_dir/My Mapping"
+(
+	cd "$completion_path_dir"
+	COMP_WORDS=(brew-port install '')
+	COMP_CWORD=2
+	_brew_port
+	contains Brewfile "${COMPREPLY[*]}"
+	COMP_WORDS=(brew-port install Brewfile '')
+	COMP_CWORD=3
+	_brew_port
+	contains Brewfile "${COMPREPLY[*]}"
+	COMP_WORDS=(brew-port install 'My ')
+	COMP_CWORD=2
+	_brew_port || true
+	has_candidate 'My Brewfile' "${COMPREPLY[@]}" || fail 'Bash completion split a Brewfile path containing spaces.'
+	COMP_WORDS=(brew-port install --map 'My ')
+	COMP_CWORD=3
+	_brew_port
+	has_candidate 'My Mapping' "${COMPREPLY[@]}" || fail 'Bash completion split an install --map path containing spaces.'
+	COMP_WORDS=(brew-port map validate --map 'My ')
+	COMP_CWORD=4
+	_brew_port
+	has_candidate 'My Mapping' "${COMPREPLY[@]}" || fail 'Bash completion split a map validate --map path containing spaces.'
+	COMP_WORDS=(brew-port map explain --map 'My ')
+	COMP_CWORD=4
+	_brew_port
+	has_candidate 'My Mapping' "${COMPREPLY[@]}" || fail 'Bash completion split a map explain --map path containing spaces.'
+)
+
+completion_home="$tmp_dir/completion-home"
+completion_data="$tmp_dir/completion-data"
+mkdir -p "$completion_home" "$completion_data"
+HOME="$completion_home" XDG_DATA_HOME="$completion_data" SHELL=/bin/bash "$utility" completion install >/dev/null
+bash_completion="$completion_data/bash-completion/completions/brew-port"
+[ -f "$bash_completion" ] || fail 'Bash completion was not installed.'
+grep -Fqx '# brew-port completion (managed)' "$bash_completion" || fail 'Bash completion was not marked as managed.'
+grep -Fqx '# >>> brew-port completion >>>' "$completion_home/.bashrc" || fail 'Bash completion did not update .bashrc.'
+grep -Fqx '# >>> brew-port completion >>>' "$completion_home/.bash_profile" || fail 'Bash completion did not update the login startup file.'
+HOME="$completion_home" XDG_DATA_HOME="$completion_data" SHELL=/bin/bash "$utility" completion install bash >/dev/null
+[ "$(grep -Fxc '# >>> brew-port completion >>>' "$completion_home/.bashrc")" -eq 1 ] || fail 'Bash completion block was duplicated.'
+[ "$(grep -Fxc '# >>> brew-port completion >>>' "$completion_home/.bash_profile")" -eq 1 ] || fail 'Bash login completion block was duplicated.'
+HOME="$completion_home" XDG_DATA_HOME="$completion_data" SHELL=/bin/bash "$utility" completion uninstall bash >/dev/null
+[ ! -e "$bash_completion" ] || fail 'Bash completion was not removed.'
+[ "$(grep -Fxc '# >>> brew-port completion >>>' "$completion_home/.bashrc" || true)" -eq 0 ] || fail 'Bash completion block was not removed.'
+[ "$(grep -Fxc '# >>> brew-port completion >>>' "$completion_home/.bash_profile" || true)" -eq 0 ] || fail 'Bash login completion block was not removed.'
+
+profile_home="$tmp_dir/profile-completion-home"
+profile_data="$tmp_dir/profile-completion-data"
+mkdir -p "$profile_home" "$profile_data"
+printf '%s\n' '# shared login profile' >"$profile_home/.profile"
+HOME="$profile_home" XDG_DATA_HOME="$profile_data" "$utility" completion install bash >/dev/null
+grep -Fqx 'if [ -n "${BASH_VERSION:-}" ]; then' "$profile_home/.profile" || fail '.profile completion block was not guarded for Bash.'
+if command -v dash >/dev/null 2>&1; then
+	if output="$(BASH_VERSION='' dash -c '. "$1"' dash "$profile_home/.profile" 2>&1)"; then :; else fail 'The guarded .profile completion block failed under dash.'; fi
+	[ -z "$output" ] || fail 'The guarded .profile completion block wrote output under dash.'
+fi
+
+legacy_home="$tmp_dir/legacy-completion-home"
+legacy_data="$tmp_dir/legacy-completion-data"
+legacy_completion="$legacy_data/bash-completion/completions/brew-port"
+mkdir -p "$(dirname "$legacy_completion")" "$legacy_home"
+cat >"$legacy_completion" <<'EOF'
+_brew_port() {
+	local cur="${COMP_WORDS[COMP_CWORD]}" commands='install update refresh-fallbacks doctor version map completion'
+	if [ "$COMP_CWORD" -eq 1 ]; then
+		COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+		return
+	fi
+	case "${COMP_WORDS[1]}" in
+	install | update | refresh-fallbacks) COMPREPLY=($(compgen -W '--dry-run --map --help' -- "$cur")) ;;
+	map) COMPREPLY=($(compgen -W 'init validate explain' -- "$cur")) ;;
+	completion) COMPREPLY=($(compgen -W 'bash fish zsh install' -- "$cur")) ;;
+	esac
+}
+complete -F _brew_port brew-port
+EOF
+HOME="$legacy_home" XDG_DATA_HOME="$legacy_data" "$utility" completion install bash >/dev/null
+grep -Fqx '# brew-port completion (managed)' "$legacy_completion" || fail 'Legacy Bash completion was not migrated.'
+HOME="$legacy_home" XDG_DATA_HOME="$legacy_data" "$utility" completion uninstall bash >/dev/null
+[ ! -e "$legacy_completion" ] || fail 'Migrated legacy Bash completion was not removed.'
+
+legacy_zsh_home="$tmp_dir/legacy-zsh-completion-home"
+legacy_zsh_data="$tmp_dir/legacy-zsh-completion-data"
+legacy_zsh_dotdir="$tmp_dir/legacy-zsh-dotdir"
+legacy_zsh_completion="$legacy_zsh_data/zsh/completions/_brew-port"
+mkdir -p "$(dirname "$legacy_zsh_completion")" "$legacy_zsh_home" "$legacy_zsh_dotdir"
+cat >"$legacy_zsh_completion" <<'EOF'
+#compdef brew-port
+_brew_port() {
+  local -a commands
+  commands=(
+    'install:install Brewfile CLI declarations through MacPorts'
+    'update:selfupdate and upgrade MacPorts'
+    'refresh-fallbacks:refresh reviewed fallback tools'
+    'doctor:report host and prerequisite status'
+    'version:print version'
+    'map:manage mappings'
+    'completion:print or install completion'
+  )
+  _arguments '1:command:->command' '*::argument:->argument'
+  case $state in
+    command) _describe -t commands command commands ;;
+    argument) case $words[2] in
+      install|update|refresh-fallbacks) _arguments '--dry-run[do not change the machine]' '--map=[mapping file]:map file:_files' ;;
+      map) _values 'map command' init validate explain ;;
+      completion) _values 'shell' bash fish zsh install ;;
+    esac ;;
+  esac
+}
+_brew_port "$@"
+EOF
+HOME="$legacy_zsh_home" XDG_DATA_HOME="$legacy_zsh_data" ZDOTDIR="$legacy_zsh_dotdir" "$utility" completion install zsh >/dev/null
+grep -Fqx '# brew-port completion (managed)' "$legacy_zsh_completion" || fail 'Legacy Zsh completion was not migrated.'
+HOME="$legacy_zsh_home" XDG_DATA_HOME="$legacy_zsh_data" ZDOTDIR="$legacy_zsh_dotdir" "$utility" completion uninstall zsh >/dev/null
+[ ! -e "$legacy_zsh_completion" ] || fail 'Migrated legacy Zsh completion was not removed.'
+
+custom_zsh_home="$tmp_dir/custom-zsh-completion-home"
+custom_zsh_data="$tmp_dir/custom-zsh-completion-data"
+custom_zsh_dotdir="$tmp_dir/custom-zsh-dotdir"
+custom_zsh_completion="$custom_zsh_data/zsh/completions/_brew-port"
+mkdir -p "$(dirname "$custom_zsh_completion")" "$custom_zsh_home" "$custom_zsh_dotdir"
+printf '%s\n' '#compdef brew-port' '_brew_port() {' '  _arguments "*:custom completion"' '}' '_brew_port "$@"' >"$custom_zsh_completion"
+custom_zsh_before="$(cat "$custom_zsh_completion")"
+if output="$(HOME="$custom_zsh_home" XDG_DATA_HOME="$custom_zsh_data" ZDOTDIR="$custom_zsh_dotdir" "$utility" completion install zsh 2>&1)"; then fail 'Custom Zsh completion was overwritten.'; fi
+contains 'Refusing to replace non-brew-port completion' "$output"
+[ "$(cat "$custom_zsh_completion")" = "$custom_zsh_before" ] || fail 'Custom Zsh completion changed during installation.'
+if output="$(HOME="$custom_zsh_home" XDG_DATA_HOME="$custom_zsh_data" ZDOTDIR="$custom_zsh_dotdir" "$utility" completion uninstall zsh 2>&1)"; then fail 'Custom Zsh completion was removed.'; fi
+contains 'Refusing to remove non-brew-port completion' "$output"
+[ "$(cat "$custom_zsh_completion")" = "$custom_zsh_before" ] || fail 'Custom Zsh completion changed during removal.'
+
+symlink_home="$tmp_dir/symlink-completion-home"
+symlink_data="$tmp_dir/symlink-completion-data"
+symlink_target="$tmp_dir/real-bashrc"
+mkdir -p "$symlink_home" "$symlink_data"
+printf '%s\n' '# existing bashrc' >"$symlink_target"
+ln -s "$symlink_target" "$symlink_home/.bashrc"
+HOME="$symlink_home" XDG_DATA_HOME="$symlink_data" "$utility" completion install bash >/dev/null
+[ -L "$symlink_home/.bashrc" ] || fail 'Bash startup symlink was replaced.'
+grep -Fqx '# >>> brew-port completion >>>' "$symlink_target" || fail 'Bash startup symlink target was not updated.'
+HOME="$symlink_home" XDG_DATA_HOME="$symlink_data" "$utility" completion uninstall bash >/dev/null
+[ -L "$symlink_home/.bashrc" ] || fail 'Bash startup symlink was replaced during removal.'
+[ "$(grep -Fxc '# >>> brew-port completion >>>' "$symlink_target" || true)" -eq 0 ] || fail 'Bash startup symlink target was not cleaned up.'
+
+zsh_dotdir="$tmp_dir/zsh-dotdir"
+HOME="$completion_home" XDG_DATA_HOME="$completion_data" ZDOTDIR="$zsh_dotdir" "$utility" completion install zsh >/dev/null
+grep -Fqx '# >>> brew-port completion >>>' "$zsh_dotdir/.zshrc" || fail 'Zsh completion did not update .zshrc.'
+HOME="$completion_home" XDG_DATA_HOME="$completion_data" ZDOTDIR="$zsh_dotdir" "$utility" completion uninstall zsh >/dev/null
+[ "$(grep -Fxc '# >>> brew-port completion >>>' "$zsh_dotdir/.zshrc" || true)" -eq 0 ] || fail 'Zsh completion block was not removed.'
+
+malformed_home="$tmp_dir/malformed-completion-home"
+malformed_data="$tmp_dir/malformed-completion-data"
+mkdir -p "$malformed_home" "$malformed_data"
+malformed_startup="$malformed_home/.bashrc"
+printf '%s\n' '# before' '# <<< brew-port completion <<<' '# unrelated' '# >>> brew-port completion >>>' '# after' >"$malformed_startup"
+malformed_startup_before="$(cat "$malformed_startup")"
+if output="$(HOME="$malformed_home" XDG_DATA_HOME="$malformed_data" "$utility" completion install bash 2>&1)"; then fail 'Malformed completion block was accepted during installation.'; fi
+contains 'Refusing to modify malformed brew-port completion block' "$output"
+[ "$(cat "$malformed_startup")" = "$malformed_startup_before" ] || fail 'Malformed completion block changed during installation.'
+malformed_completion="$malformed_data/bash-completion/completions/brew-port"
+[ ! -e "$malformed_completion" ] || fail 'Malformed completion block installed a completion file.'
+mkdir -p "$(dirname "$malformed_completion")"
+cp "$repo_dir/completions/brew-port.bash" "$malformed_completion"
+if output="$(HOME="$malformed_home" XDG_DATA_HOME="$malformed_data" "$utility" completion uninstall bash 2>&1)"; then fail 'Malformed completion block was accepted during removal.'; fi
+contains 'Refusing to modify malformed brew-port completion block' "$output"
+[ "$(cat "$malformed_startup")" = "$malformed_startup_before" ] || fail 'Malformed completion block changed during removal.'
+[ -f "$malformed_completion" ] || fail 'Malformed completion block removed a completion file.'
+
+if command -v fish >/dev/null 2>&1; then
+	for completion_action in install uninstall; do
+		fish_output="$(fish -c 'source "$argv[1]"; complete -C "brew-port completion $argv[2] "' "$repo_dir/completions/brew-port.fish" "$completion_action")"
+		contains bash "$fish_output"
+		contains fish "$fish_output"
+		contains zsh "$fish_output"
+	done
+fi
+
+mkdir -p "$(dirname "$bash_completion")"
+printf '%s\n' '# user completion' >"$bash_completion"
+if output="$(HOME="$completion_home" XDG_DATA_HOME="$completion_data" "$utility" completion install bash 2>&1)"; then fail 'Unmanaged completion was overwritten.'; fi
+contains 'Refusing to replace non-brew-port completion' "$output"
 
 shellcheck -s bash -x -P "$repo_dir/bin" "$utility" "$repo_dir"/maps/fallbacks/*.sh "$repo_dir/tests/integration.sh"
 git diff --check
