@@ -1,0 +1,21 @@
+branches:
+  - main
+tagFormat: v${version}
+plugins:
+  - - '@semantic-release/commit-analyzer'
+    - preset: conventionalcommits
+  - - '@semantic-release/release-notes-generator'
+    - preset: conventionalcommits
+  - - '@semantic-release/exec'
+    - prepareCmd: >-
+        RELEASE_VERSION=${nextRelease.version}
+        RELEASE_TAG=${nextRelease.gitTag}
+        bash scripts/package-release.sh dist
+  - - '@semantic-release/github'
+    - assets:
+        - path: dist/*.tar.gz
+          label: brew-port archive
+        - path: dist/SHA256SUMS
+          label: SHA256 checksums
+        - path: install.sh
+          label: bootstrap installer

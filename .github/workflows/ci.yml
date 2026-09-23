@@ -33,6 +33,7 @@ jobs:
       - uses: melusina-org/setup-macports@v1.1.6
         id: macports
         with:
+          cache: disable
           parameters: .github/parameters/setup-macports.yaml
       - name: Install ShellCheck from a bottle
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install --force-bottle shellcheck
@@ -44,14 +45,10 @@ jobs:
           EXPECTED_ARCH: ${{ matrix.arch }}
       - name: System Bash 3.2
         run: |
-          /bin/bash tests/bump-version.sh
-          /bin/bash tests/release-version.sh
           /bin/bash tests/test.sh
           /bin/bash tests/release.sh
       - name: Current Bash
         run: |
-          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/bump-version.sh
-          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release-version.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/test.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release.sh
       - name: Real Brewfile installation

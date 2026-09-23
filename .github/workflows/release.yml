@@ -1,97 +1,20 @@
 name: Release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      bump:
-        description: Version increment
-        required: true
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-          - prerelease
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      sha: ${{ steps.version.outputs.sha }}
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-    steps:
-      - name: Require the default branch
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          [ "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH" ] || {
-            echo "Releases must run from $DEFAULT_BRANCH, not $GITHUB_REF_NAME." >&2
-            exit 1
-          }
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Compute and commit version
-        id: version
-        env:
-          BUMP: ${{ inputs.bump }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          current="$(sed -n 's/^BP_VERSION=//p' bin/brew-port)"
-          [ "$(sed -n '/^BP_VERSION=/p' bin/brew-port | wc -l | tr -d ' ')" = 1 ]
-          last_bump_commit="$(git log -G '^BP_VERSION=' --format='%H' -n 1 -- bin/brew-port || true)"
-          last_bump_subject=''
-          last_bump_type=''
-          if [ -n "$last_bump_commit" ]; then
-            last_bump_subject="$(git show -s --format='%s' "$last_bump_commit")"
-            last_bump_type="$(git show -s --format='%B' "$last_bump_commit" | sed -n 's/^Release-Bump: //p')"
-          fi
-          release_state=none
-          if release_draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$current" --jq '.draft' 2>/dev/null)"; then
-            if [ "$release_draft" = true ]; then
-              release_state=draft
-            else
-              release_state=published
-            fi
-          fi
-          version="$(bash scripts/release-version.sh "$current" "$BUMP" "$last_bump_subject" "$last_bump_type" "$release_state")"
-          if [ "$version" != "$current" ]; then
-            temporary="$(mktemp)"
-            awk -v replacement="BP_VERSION=$version" '
-              /^BP_VERSION=/ {
-                count++
-                if (count > 1) exit 2
-                print replacement
-                next
-              }
-              { print }
-              END { if (count != 1) exit 3 }
-            ' bin/brew-port >"$temporary"
-            mv "$temporary" bin/brew-port
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add bin/brew-port
-            git commit -m "Bump BP_VERSION to $version [skip ci]" -m "Release-Bump: $BUMP"
-            git push origin "HEAD:$GITHUB_REF_NAME"
-          fi
-          sha="$(git rev-parse HEAD)"
-          {
-            printf 'version=%s\n' "$version"
-            printf 'tag=v%s\n' "$version"
-            printf 'sha=%s\n' "$sha"
-          } >>"$GITHUB_OUTPUT"
-
   checks:
-    needs: prepare
     timeout-minutes: 45
     name: Release checks (${{ matrix.runner }}, ${{ matrix.arch }})
     strategy:
@@ -109,13 +32,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.prepare.outputs.sha }}
-      - run: test "$(git rev-parse HEAD)" = "${{ needs.prepare.outputs.sha }}"
       - uses: melusina-org/setup-macports@v1.1.6
         id: macports
         with:
+          cache: disable
           parameters: .github/parameters/setup-macports.yaml
+      - name: Install ShellCheck from a bottle
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install --force-bottle shellcheck
       - name: Expose MacPorts binaries
         run: echo "${{ steps.macports.outputs.prefix }}/bin" >> "$GITHUB_PATH"
       - name: Verify native architecture
@@ -124,90 +47,42 @@ jobs:
           EXPECTED_ARCH: ${{ matrix.arch }}
       - name: System Bash 3.2
         run: |
-          /bin/bash tests/bump-version.sh
-          /bin/bash tests/release-version.sh
           /bin/bash tests/test.sh
           /bin/bash tests/release.sh
       - name: Current Bash
         run: |
-          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/bump-version.sh
-          "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release-version.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/test.sh
           "${{ steps.macports.outputs.prefix }}/bin/bash" tests/release.sh
       - name: Real Brewfile installation
         run: /bin/bash tests/integration.sh
         env:
           BREW_PORT_PORT_BIN: ${{ steps.macports.outputs.prefix }}/bin/port
+          GITHUB_TOKEN: ${{ github.token }}
 
   release:
-    needs: [prepare, checks]
-    runs-on: macos-15
+    needs: checks
+    if: needs.checks.result == 'success'
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
+      issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
-      - name: Verify release checkout
-        run: test "$(git rev-parse HEAD)" = "${{ needs.prepare.outputs.sha }}"
-      - name: Package release
-        run: bash scripts/package-release.sh
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run semantic-release
         env:
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-      - name: Create or reuse draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          release_id=''
-          release_draft=''
-          if release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id' 2>/dev/null)"; then
-            release_draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" --jq '.draft')"
-            [ "$release_draft" = true ] || { echo "Refusing to overwrite published release $RELEASE_TAG." >&2; exit 1; }
-          fi
-          remote_tag="$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 { print $1 }')"
-          tag_exists=false
-          if [ -n "$remote_tag" ]; then
-            tag_exists=true
-            git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-            tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
-            [ "$tag_sha" = "$RELEASE_SHA" ] || { echo "Tag $RELEASE_TAG does not target $RELEASE_SHA." >&2; exit 1; }
-          fi
-          if [ -z "$release_id" ]; then
-            create_args=("$RELEASE_TAG" --target "$RELEASE_SHA" --draft --title "brew-port $RELEASE_TAG" --generate-notes)
-            if [[ "$VERSION" == *-* ]]; then
-              create_args+=(--prerelease)
-            fi
-            gh release create "${create_args[@]}"
-            release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')"
-          fi
-          if [ "$tag_exists" = false ]; then
-            release_target="$(gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -f target_commitish="$RELEASE_SHA" --jq '.target_commitish')"
-            [ "$release_target" = "$RELEASE_SHA" ] || { echo "Draft $RELEASE_TAG does not target $RELEASE_SHA." >&2; exit 1; }
-          fi
-          printf 'RELEASE_ID=%s\n' "$release_id" >>"$GITHUB_ENV"
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS install.sh --clobber
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ env.RELEASE_ID }}
-          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          if [[ "$VERSION" == *-* ]]; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -f target_commitish="$RELEASE_SHA" -F draft=false -F prerelease=true >/dev/null
-          else
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -f target_commitish="$RELEASE_SHA" -F draft=false -F prerelease=false >/dev/null
-          fi
-          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
-          [ "$tag_sha" = "$RELEASE_SHA" ] || { echo "Published tag $RELEASE_TAG does not target $RELEASE_SHA." >&2; exit 1; }
+          npx --yes \
+            --package semantic-release@25.0.9 \
+            --package @semantic-release/commit-analyzer@13.0.1 \
+            --package @semantic-release/release-notes-generator@14.1.1 \
+            --package conventional-changelog-conventionalcommits@10.4.0 \
+            --package @semantic-release/exec@7.1.0 \
+            --package @semantic-release/github@12.0.10 \
+            semantic-release

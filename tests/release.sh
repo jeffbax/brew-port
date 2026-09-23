@@ -145,7 +145,13 @@ if bash "$release_dir/install.sh" --prefix "$tmp_dir/corrupt" >/dev/null 2>&1; t
 printf '\ncorrupt\n' >>"$tmp_dir/download/brew-port-$version.tar.gz"
 if (cd "$tmp_dir/download" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1); then fail 'Corrupt download passed verification.'; fi
 if RELEASE_TAG=v9.9.9 bash "$repo_dir/scripts/package-release.sh" "$tmp_dir/wrong-tag" >/dev/null 2>&1; then fail 'Mismatched tag was accepted.'; fi
-for file in install.sh scripts/bump-version.sh scripts/package-release.sh scripts/release-version.sh tests/bump-version.sh tests/release-version.sh tests/release.sh; do /bin/bash -n "$repo_dir/$file"; done
-shfmt -ln bash -d "$repo_dir/install.sh" "$repo_dir/scripts/bump-version.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/scripts/release-version.sh" "$repo_dir/tests/bump-version.sh" "$repo_dir/tests/release-version.sh" "$repo_dir/tests/release.sh"
-shellcheck -s bash "$repo_dir/install.sh" "$repo_dir/scripts/bump-version.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/scripts/release-version.sh" "$repo_dir/tests/bump-version.sh" "$repo_dir/tests/release-version.sh" "$repo_dir/tests/release.sh"
+semantic_version=0.2.0
+RELEASE_VERSION="$semantic_version" RELEASE_TAG="v$semantic_version" bash "$repo_dir/scripts/package-release.sh" "$tmp_dir/semantic-download" >/dev/null
+mkdir "$tmp_dir/semantic-extracted"
+tar -xzf "$tmp_dir/semantic-download/brew-port-$semantic_version.tar.gz" -C "$tmp_dir/semantic-extracted"
+[ "$("$tmp_dir/semantic-extracted/brew-port-$semantic_version/bin/brew-port" version)" = "brew-port $semantic_version" ] || fail 'Semantic release version was not embedded in the archive.'
+[ "$("$repo_dir/bin/brew-port" version)" = "brew-port $version" ] || fail 'Semantic release packaging modified the source checkout.'
+for file in install.sh scripts/package-release.sh tests/release.sh; do /bin/bash -n "$repo_dir/$file"; done
+shfmt -ln bash -d "$repo_dir/install.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/tests/release.sh"
+shellcheck -s bash "$repo_dir/install.sh" "$repo_dir/scripts/package-release.sh" "$repo_dir/tests/release.sh"
 printf '%s\n' 'Release installation checks passed.'
