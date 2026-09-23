@@ -35,7 +35,7 @@ less "brew-port-$version/install.sh"
 bash "brew-port-$version/install.sh" --prefix '/path/to/prefix'
 ```
 
-GitHub CLI release and asset attestation verification, when available, provides additional provenance checking.
+This repository uses GitHub immutable releases: after publication, the associated tag and release assets cannot be changed, and GitHub automatically generates a release attestation. See [GitHub's release verification documentation](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/verify-release-integrity) to verify releases and local assets.
 
 ## Runtime prerequisites and updates
 

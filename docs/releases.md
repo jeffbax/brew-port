@@ -1,44 +1,56 @@
 # Release checklist
 
-Releases use semver (`vMAJOR.MINOR.PATCH`, optionally with `-IDENTIFIER.NUMBER`) and must match `BP_VERSION` in the CLI. One source/runtime archive supports both native Intel and Apple Silicon.
+Releases use semantic versioning. semantic-release derives the next version from conventional commit messages after the latest tag, while the release archive embeds that version in `BP_VERSION`. The repository keeps the runtime version field for installed CLI reporting; release version changes do not require a source commit.
 
 ## Start a release
 
-1. Merge the intended changes into the default branch.
-2. Open the **Release** workflow and choose `patch`, `minor`, `major`, or `prerelease` from the **Run workflow** dropdown.
-3. The workflow computes the next version with `scripts/bump-version.sh`, changes only the `BP_VERSION` assignment, commits it as `github-actions[bot]` with `[skip ci]`, and pushes that commit to the default branch.
-4. The exact commit SHA then runs the full native matrix on macOS 15 and 26, ARM64 and Intel. Each runner executes the version helper checks, the general tests, the packaged-release tests, and the real Brewfile integration test under system Bash 3.2 and current MacPorts Bash.
+1. Merge changes into `main` using the normal protected-branch pull request flow.
+2. Use conventional commit types for release-worthy changes: `fix:` produces a patch release, `feat:` produces a minor release, and `BREAKING CHANGE:` produces a major release. Other commits do not create a release.
+3. The **Release** workflow runs after the push to `main`. It runs the native macOS 15 and 26 matrix on ARM64 and Intel, then runs semantic-release on Ubuntu if every check passes.
+4. semantic-release generates release notes, creates and pushes the version tag, then the GitHub plugin creates the GitHub Release and publishes the archive, `SHA256SUMS`, and `install.sh`.
 
-The version bump commit remains on the default branch if checks fail. Fix the issue, then run the same dropdown choice again. The commit records that choice as `Release-Bump` metadata; a retry with a different choice or missing metadata fails instead of silently reusing the version. Release runs are serialized and are never cancelled.
+The workflow does not create commits, update `main`, or require a release GitHub App, signing key, private key, repository variable, or bypass permission.
 
-The CI workflow uses a branch-aware concurrency key. A newer push cancels older checks for the same branch; pull requests use the head repository and head branch so forks do not collide.
+Release runs are serialized and never cancelled. Because semantic-release pushes the tag before publication, a failed run can leave an existing tag or draft release. Inspect the tag and release before retrying: verify that an existing tag points to the intended commit, and for an existing draft upload missing assets and publish it. If no draft exists, create the release for the existing tag and attach the configured assets. Do not overwrite a published release.
 
 ## Packaging and publication
 
-After the matrix passes, the workflow creates or reuses a draft release targeted at the exact checked commit, then uploads:
+The release job runs on Ubuntu and invokes `scripts/package-release.sh` with the semantic-release version. The script copies the repository into a staging directory, replaces `BP_VERSION` only in that staged copy, creates `brew-port-VERSION.tar.gz`, and writes the archive checksum. The source checkout remains unchanged.
 
-- `brew-port-VERSION.tar.gz`, with the packaged runtime and offline installer;
-- `SHA256SUMS`, covering the archive; and
-- `install.sh`, the dual-mode bootstrap/offline installer.
-
-Existing drafts without a tag are retargeted to the exact commit that passed the retry's checks. Existing tags must already target that commit. Assets are replaced with `--clobber`, and the final published tag is verified against the tested SHA. The draft is published automatically only after all assets upload successfully. Versions with a prerelease suffix are marked as prereleases, so GitHub's `latest` download excludes them. A published release is never overwritten.
+The GitHub plugin creates a draft release, uploads the configured assets, and publishes the release after the uploads succeed. GitHub immutable releases are enabled: after publication, the associated tag and release assets cannot be changed, and GitHub automatically generates a release attestation.
 
 The archive contains its own file checksums, installer, CLI modules, maps, fallbacks, completions, agent skill, README, and license. Generated archives and checksums stay in ignored `dist/` or temporary directories.
 
+Versions with a prerelease suffix are published as prereleases when semantic-release is configured with a prerelease branch. The default `main` branch currently produces stable releases from the existing release line.
+
+## Required repository setup
+
+- Allow GitHub Actions to run workflows and use the workflow `GITHUB_TOKEN` with `contents: write`.
+- Keep the `main` ruleset configured to require pull requests and the normal **Checks** matrix jobs. semantic-release runs only after the merge and does not need to bypass those rules.
+- No npm project, `package.json`, signing app, or release secret is required. The workflow installs pinned semantic-release packages with `npx` on Node 24.
+
 ## Verify locally
 
-Run the direct helper checks and both test suites under system Bash and current Bash:
+Run the test suites under system Bash and current Bash:
 
 ```sh
-/bin/bash tests/bump-version.sh
-/bin/bash tests/release-version.sh
 /bin/bash tests/test.sh
 /bin/bash tests/release.sh
+bash tests/test.sh
+bash tests/release.sh
 ```
 
-The installation suite exercises bootstrap downloads with a fake curl, malformed manifests, download failures, checksum failures, argument forwarding, offline installation, repeat installation, upgrade, and rollback. It also enforces Bash syntax, ShellCheck, and shfmt for the helper and installers.
+For a local package using the checked-in runtime version, run:
 
-For a local package, run `bash scripts/package-release.sh`. The output directory contains the archive and its outer `SHA256SUMS`; verify them before extraction. The release workflow performs the same packaging after checking out its exact prepare SHA.
+```sh
+bash scripts/package-release.sh
+```
+
+To preview the archive behavior used by semantic-release, provide an explicit version:
+
+```sh
+RELEASE_VERSION=0.2.0 RELEASE_TAG=v0.2.0 bash scripts/package-release.sh dist
+```
 
 The bootstrap command is:
 
