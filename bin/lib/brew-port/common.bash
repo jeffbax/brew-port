@@ -52,6 +52,16 @@ bp_find_jq() {
 	fi
 }
 
+bp_find_curl() {
+	if [ -n "${BREW_PORT_CURL_BIN:-}" ]; then
+		BP_CURL_BIN="$BREW_PORT_CURL_BIN"
+	elif [ -x /usr/bin/curl ]; then
+		BP_CURL_BIN=/usr/bin/curl
+	else
+		BP_CURL_BIN="$(bp_command_path curl)"
+	fi
+}
+
 bp_require_macos() {
 	[ "$BP_OS" = Darwin ] || bp_die "brew-port supports macOS only (detected $BP_OS)."
 }

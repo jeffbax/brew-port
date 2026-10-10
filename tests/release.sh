@@ -105,12 +105,14 @@ mkdir "$tmp_dir/mocks"
 # shellcheck disable=SC2016
 printf '%s\n' '#!/bin/bash' 'case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac' >"$tmp_dir/mocks/uname"
 # shellcheck disable=SC2016
-printf '%s\n' '#!/bin/bash' 'if [ "$1" = version ]; then exit 0; fi' 'if [ "$1 ${2:-} ${3:-}" = "-q echo active" ]; then exit 0; fi' 'exit 99' >"$tmp_dir/mocks/port"
+printf '%s\n' '#!/bin/bash' 'if [ "$1" = version ]; then exit 0; fi' 'if [ "$1 ${2:-} ${3:-}" = "-q echo active" ]; then [ "${MOCK_AUDIT_PORTS:-0}" != 1 ] || printf "%s\\n" git; exit 0; fi' 'if [ "$1 ${2:-} ${3:-}" = "-q echo all" ]; then printf "%s\\n" git; exit 0; fi' 'exit 99' >"$tmp_dir/mocks/port"
 printf '%s\n' '#!/bin/bash' 'exit 99' >"$tmp_dir/mocks/sudo"
 chmod +x "$tmp_dir/mocks/"*
 printf '%s\n' 'brew "git"' >"$tmp_dir/Brewfile"
 dry_run="$(BREW_PORT_UNAME_BIN="$tmp_dir/mocks/uname" BREW_PORT_PORT_BIN="$tmp_dir/mocks/port" BREW_PORT_SUDO_BIN="$tmp_dir/mocks/sudo" "$cli" install --dry-run "$tmp_dir/Brewfile")"
 [[ "$dry_run" == *git* ]] || fail 'Packaged dry-run did not translate the Brewfile.'
+audit_output="$(MOCK_AUDIT_PORTS=1 BREW_PORT_UNAME_BIN="$tmp_dir/mocks/uname" BREW_PORT_PORT_BIN="$tmp_dir/mocks/port" BREW_PORT_SUDO_BIN="$tmp_dir/mocks/sudo" "$cli" audit "$tmp_dir/Brewfile")"
+[[ "$audit_output" == *'Result: coverage complete'* ]] || fail 'Packaged audit did not load the runtime modules.'
 bash "$release_dir/install.sh" >/dev/null
 custom_prefix="$tmp_dir/custom prefix"
 bash "$release_dir/install.sh" --prefix "$custom_prefix" >/dev/null

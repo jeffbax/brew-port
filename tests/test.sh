@@ -34,14 +34,28 @@ mock_port="$tmp_dir/port"
 mock_sudo="$tmp_dir/sudo"
 mock_sysctl="$tmp_dir/sysctl"
 mock_mas="$tmp_dir/mas"
+mock_curl="$tmp_dir/curl"
 sudo_log="$tmp_dir/sudo.log"
 jq_log="$tmp_dir/jq.log"
 mas_log="$tmp_dir/mas.log"
+curl_log="$tmp_dir/curl.log"
 active_ports="$tmp_dir/active-ports"
+all_ports="$tmp_dir/all-ports"
+port_info="$tmp_dir/port-info"
+port_livecheck="$tmp_dir/port-livecheck"
+curl_response="$tmp_dir/curl-response"
 mas_installed="$tmp_dir/mas-installed"
 : >"$active_ports"
+: >"$all_ports"
+: >"$port_info"
+: >"$port_livecheck"
+: >"$curl_response"
 : >"$mas_installed"
 export MOCK_ACTIVE_PORTS="$active_ports"
+export MOCK_ALL_PORTS="$all_ports"
+export MOCK_PORT_INFO="$port_info"
+export MOCK_PORT_LIVECHECK="$port_livecheck"
+export MOCK_CURL_RESPONSE="$curl_response"
 export MOCK_MAS_INSTALLED="$mas_installed"
 cat >"$mock_uname" <<'EOF'
 #!/usr/bin/env bash
@@ -49,15 +63,36 @@ case "$1" in -s) echo Darwin ;; -m) echo "${MOCK_ARCH:?}" ;; *) exit 2 ;; esac
 EOF
 cat >"$mock_port" <<'EOF'
 #!/usr/bin/env bash
+[ -z "${MOCK_PORT_LOG:-}" ] || printf '%s\n' "$*" >>"$MOCK_PORT_LOG"
 if [ "$1 ${2:-} ${3:-}" = '-q echo active' ]; then
 	cat "${MOCK_ACTIVE_PORTS:?}"
 	exit 0
 fi
+if [ "$1 ${2:-} ${3:-}" = '-q echo all' ]; then
+	cat "${MOCK_ALL_PORTS:?}"
+	exit 0
+fi
+[ "${1:-}" != -b ] || shift
 case "$1" in
 version) exit 0 ;;
 install)
 	echo "port $*"
 	for target in "${@:2}"; do [ "${MOCK_PORT_FAIL_TARGET:-}" != "$target" ] || exit 1; done
+	;;
+info) cat "${MOCK_PORT_INFO:?}" ;;
+livecheck)
+	if [ "${2:-}" = -v ]; then
+		cat "${MOCK_PORT_LIVECHECK:?}"
+	else
+		sed '/seems to be up to date/d' "${MOCK_PORT_LIVECHECK:?}"
+	fi
+	;;
+archivefetch)
+	[ "${MOCK_PORT_ARCHIVE_FAIL:-}" != "${2:-}" ] || {
+		printf 'Archive for %s not found, required when binary-only\n' "${2:-}" >&2
+		exit 1
+	}
+	printf 'Fetched archive for %s\n' "${2:-}"
 	;;
 selfupdate|select|upgrade) echo "port $*" ;;
 *) exit 2 ;;
@@ -78,7 +113,9 @@ cat >"$mock_mas" <<'EOF'
 #!/usr/bin/env bash
 command="$1"
 shift
+[ -z "${MOCK_MAS_LOG:-}" ] || printf '%s %s\n' "$command" "$*" >>"$MOCK_MAS_LOG"
 [ "${MOCK_MAS_HANG_COMMAND:-}" != "$command" ] || sleep 5
+[ "${MOCK_MAS_FAIL_COMMAND:-}" != "$command" ] || { printf 'mock MAS %s failed\n' "$command" >&2; exit 1; }
 case "$command" in
 list)
 	for id in "$@"; do grep -Fxq -- "$id" "${MOCK_MAS_INSTALLED:?}" && printf '%s Mock App (1.0)\n' "$id"; done
@@ -86,7 +123,7 @@ list)
 	;;
 lookup)
 	[ "${1:-}" = --json ] && shift
-	for id in "$@"; do [ "${MOCK_MAS_INVALID:-}" = "$id" ] || printf '{"id":%s}\n' "$id"; done
+	for id in "$@"; do [ "${MOCK_MAS_INVALID:-}" = "$id" ] || printf '{"adamID":%s}\n' "$id"; done
 	;;
 install)
 	[ "${MOCK_MAS_FAIL_INSTALL:-0}" != 1 ] || { echo 'mock MAS install failed' >&2; exit 1; }
@@ -97,6 +134,13 @@ install)
 esac
 EOF
 chmod +x "$mock_mas"
+cat >"$mock_curl" <<'EOF'
+#!/usr/bin/env bash
+[ -z "${MOCK_CURL_LOG:-}" ] || printf '%s\n' "$*" >>"$MOCK_CURL_LOG"
+[ "${MOCK_CURL_FAIL:-0}" != 1 ] || { printf 'mock curl failure\n' >&2; exit 1; }
+cat "${MOCK_CURL_RESPONSE:?}"
+EOF
+chmod +x "$mock_curl"
 
 custom_port_bin="$tmp_dir/custom-macports/bin"
 mkdir -p "$custom_port_bin"
@@ -117,6 +161,7 @@ command -v "$shfmt_bin" >/dev/null || fail 'shfmt is required to run the checks.
 "$utility" map validate | grep -Fq 'Mappings are valid.'
 [ "$("$utility" --version)" = "$("$utility" version)" ] || fail '--version did not match version.'
 "$utility" help map explain | grep -Fq 'Usage: brew-port map explain'
+"$utility" help audit | grep -Fq 'Usage: brew-port audit'
 "$utility" help completion install | grep -Fq 'Usage: brew-port completion install'
 "$utility" help completion uninstall | grep -Fq 'Usage: brew-port completion uninstall'
 "$utility" map --help | grep -Fq 'brew-port map validate'
@@ -128,6 +173,13 @@ printf '%s\n' 'brew "git"' >"$prefix_brewfile"
 : >"$jq_log"
 MOCK_ARCH=arm64 MOCK_JQ_LOG="$jq_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$custom_port_bin/port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --dry-run "$prefix_brewfile" >/dev/null
 [ -s "$jq_log" ] || fail 'The selected MacPorts prefix jq was not used.'
+printf '%s\n' git >"$all_ports"
+printf '%s\n' git >"$active_ports"
+: >"$jq_log"
+MOCK_ARCH=arm64 MOCK_JQ_LOG="$jq_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$custom_port_bin/port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$prefix_brewfile" >/dev/null
+[ -s "$jq_log" ] || fail 'Audit did not use jq from the selected MacPorts prefix.'
+: >"$all_ports"
+: >"$active_ports"
 MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install "$prefix_brewfile" --dry-run >/dev/null
 MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install -- "$prefix_brewfile" >/dev/null
 linked_bin="$tmp_dir/linked-bin"
@@ -269,6 +321,196 @@ output="$(PATH="$tmp_dir:$PATH" MAS_LOG="$mas_log" MOCK_MAS_HANG_COMMAND=install
 contains 'Batch install timed out after 1s; returning success to the caller.' "$output"
 contains 'Result: success with warnings' "$output"
 [ ! -s "$mas_log" ] || fail 'A timed-out MAS batch fell back to one-by-one installation.'
+
+audit_map_dir="$tmp_dir/audit-map"
+audit_map="$audit_map_dir/mappings.json"
+audit_present="$tmp_dir/Audit Present.app"
+mkdir -p "$audit_map_dir/fallbacks" "$audit_present"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$audit_map_dir/fallbacks/fallback-tool.sh"
+chmod +x "$audit_map_dir/fallbacks/fallback-tool.sh"
+jq -n --arg present "$audit_present" --arg missing "$tmp_dir/Audit Missing.app" '{version:1,mappings:[
+  {kind:"brew",token:"fallback-tool",action:"fallback",target:"fallbacks/fallback-tool.sh",architectures:["arm64"]},
+  {kind:"brew",token:"wrong-arch-tool",action:"fallback",target:"fallbacks/fallback-tool.sh",architectures:["x86_64"]},
+  {kind:"cask",token:"present-app",action:"manual",detect:[$present]},
+  {kind:"cask",token:"missing-app",action:"manual",detect:[$missing]},
+  {kind:"cask",token:"ported-app",action:"port",target:"git"},
+  {kind:"cask",token:"versioned-app",action:"port",target:"git@1.2"},
+  {kind:"cask",token:"variant-app",action:"port",target:"git +universal"},
+  {kind:"cask",token:"disabled-variant-app",action:"port",target:"git -universal"},
+  {kind:"cask",token:"multiple-variant-app",action:"port",target:"git +universal -docs"},
+  {kind:"cask",token:"versioned-variant-app",action:"port",target:"git@1.2 +universal"},
+  {kind:"cask",token:"inactive-variant-app",action:"port",target:"inactive-tool +universal"},
+  {kind:"cask",token:"unavailable-variant-app",action:"port",target:"unavailable-tool -universal"},
+  {kind:"cask",token:"skipped-app",action:"skip",note:"not needed after migration"}
+]}' >"$audit_map"
+audit_brewfile="$tmp_dir/audit.Brewfile"
+printf '%s\n' \
+	'brew "git"' \
+	'brew "inactive-tool"' \
+	'brew "unavailable-tool"' \
+	'brew "fallback-tool"' \
+	'brew "wrong-arch-tool"' \
+	'cask "present-app"' \
+	'cask "missing-app"' \
+	'cask "unmapped-app"' \
+	'cask "ported-app"' \
+	'cask "versioned-app"' \
+	'cask "variant-app"' \
+	'cask "disabled-variant-app"' \
+	'cask "multiple-variant-app"' \
+	'cask "versioned-variant-app"' \
+	'cask "inactive-variant-app"' \
+	'cask "unavailable-variant-app"' \
+	'cask "skipped-app"' \
+	'mas "Installed App", id: 10001' \
+	'mas "Missing App", id: 10002' \
+	'mas "Invalid App", id: 10003' >"$audit_brewfile"
+printf '%s\n' git inactive-tool >"$all_ports"
+printf '%s\n' git >"$active_ports"
+printf '%s\n' 10001 >"$mas_installed"
+audit_port_log="$tmp_dir/audit-port.log"
+audit_mas_log="$tmp_dir/audit-mas.log"
+: >"$audit_port_log"
+: >"$audit_mas_log"
+: >"$sudo_log"
+: >"$mas_log"
+if output="$(PATH="$tmp_dir:$PATH" XDG_STATE_HOME="$tmp_dir/audit-state" MOCK_ARCH=arm64 MOCK_PORT_LOG="$audit_port_log" MOCK_MAS_LOG="$audit_mas_log" MOCK_MAS_INVALID=10003 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit --map "$audit_map" "$audit_brewfile" 2>&1)"; then fail 'Blocked audit unexpectedly succeeded.'; fi
+contains 'MacPorts targets: active 7, inactive 2, unavailable 2' "$output"
+contains 'Reviewed fallbacks: 1 (runtime presence not verified)' "$output"
+contains 'Manual casks: detected 1, missing 1, unmapped 1' "$output"
+contains 'Mac App Store apps: installed 1, missing 1, invalid 1, unknown 0' "$output"
+contains 'brew inactive-tool: MacPorts port is available but inactive: inactive-tool.' "$output"
+contains 'brew unavailable-tool: MacPorts port is unavailable: unavailable-tool.' "$output"
+not_contains 'cask versioned-app: MacPorts port is unavailable: git@1.2.' "$output"
+contains 'cask inactive-variant-app: MacPorts port is available but inactive: inactive-tool +universal.' "$output"
+contains 'cask unavailable-variant-app: MacPorts port is unavailable: unavailable-tool -universal.' "$output"
+contains 'brew wrong-arch-tool: No verified native fallback for arm64.' "$output"
+contains 'cask missing-app: No configured detection path exists.' "$output"
+contains 'cask unmapped-app: No mapping or detection path.' "$output"
+contains 'Missing App (10002): Mac App Store app is not installed.' "$output"
+contains 'Invalid App (10003): Mac App Store ID is unavailable.' "$output"
+contains 'Result: blocked' "$output"
+grep -Fqx -- '-q echo all' "$audit_port_log" || fail 'Audit did not scan the MacPorts catalog once.'
+grep -Fqx -- '-q echo active' "$audit_port_log" || fail 'Audit did not scan active MacPorts ports once.'
+grep -Fqx 'list 10001 10002 10003' "$audit_mas_log" || fail 'Audit did not list MAS apps in one batch.'
+grep -Fqx 'lookup --json 10001 10002 10003' "$audit_mas_log" || fail 'Audit did not validate MAS IDs in one batch.'
+[ ! -s "$sudo_log" ] || fail 'Audit used sudo.'
+[ ! -s "$mas_log" ] || fail 'Audit invoked MAS installation.'
+[ ! -e "$tmp_dir/audit-state/brew-port" ] || fail 'Audit wrote fallback state.'
+
+audit_options_brewfile="$tmp_dir/audit-options.Brewfile"
+printf '%s\n' 'brew "llvm", args: ["with-clang"]' >"$audit_options_brewfile"
+printf '%s\n' llvm >"$all_ports"
+printf '%s\n' llvm >"$active_ports"
+if output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$audit_options_brewfile" 2>&1)"; then fail 'Audit accepted unsupported Brewfile options.'; fi
+contains 'brew llvm: Unsupported Brewfile options.' "$output"
+not_contains 'MacPorts targets: active 1' "$output"
+contains 'Result: blocked' "$output"
+
+audit_warning_brewfile="$tmp_dir/audit-warning.Brewfile"
+printf '%s\n' 'brew "git"' 'mas "Slow App", id: 10004' >"$audit_warning_brewfile"
+printf '%s\n' git >"$all_ports"
+printf '%s\n' git >"$active_ports"
+printf '%s\n' 10004 >"$mas_installed"
+: >"$audit_mas_log"
+output="$(PATH="$tmp_dir:$PATH" MOCK_ARCH=arm64 MOCK_MAS_LOG="$audit_mas_log" MOCK_MAS_HANG_COMMAND=lookup BREW_PORT_MAS_TIMEOUT=1 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$audit_warning_brewfile")"
+contains 'Availability scan timed out after 1s; App Store availability is unknown.' "$output"
+contains 'Result: coverage complete with warnings' "$output"
+grep -Fqx 'list 10004' "$audit_mas_log" || fail 'Audit warning path did not list MAS apps.'
+grep -Fqx 'lookup --json 10004' "$audit_mas_log" || fail 'Audit warning path did not validate MAS IDs.'
+
+audit_mas_failure_brewfile="$tmp_dir/audit-mas-failure.Brewfile"
+printf '%s\n' 'brew "git"' 'mas "Lookup Failure", id: 10005' >"$audit_mas_failure_brewfile"
+printf '%s\n' git >"$all_ports"
+printf '%s\n' git >"$active_ports"
+output="$(PATH="$tmp_dir:$PATH" MOCK_ARCH=arm64 MOCK_MAS_FAIL_COMMAND=lookup BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$audit_mas_failure_brewfile")"
+contains 'Availability scan failed: mock MAS lookup failed; App Store availability is unknown.' "$output"
+contains 'Result: coverage complete with warnings' "$output"
+
+candidate_map_dir="$tmp_dir/candidate-map"
+candidate_map="$candidate_map_dir/mappings.json"
+candidate_present="$tmp_dir/HandBrake.app"
+mkdir -p "$candidate_map_dir/fallbacks" "$candidate_present"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$candidate_map_dir/fallbacks/handbrake.sh"
+chmod +x "$candidate_map_dir/fallbacks/handbrake.sh"
+jq -n --arg present "$candidate_present" '{version:1,mappings:[
+  {kind:"cask",token:"handbrake-app",action:"manual",detect:[$present]},
+  {kind:"cask",token:"handbrake-desktop",action:"fallback",target:"fallbacks/handbrake.sh",architectures:["arm64"]},
+  {kind:"cask",token:"handbrake",action:"skip"},
+  {kind:"brew",token:"git",action:"skip"},
+  {kind:"cask",token:"ported-app",action:"port",target:"git"}
+]}' >"$candidate_map"
+candidate_brewfile="$tmp_dir/candidates.Brewfile"
+printf '%s\n' 'cask "handbrake-app"' 'cask "handbrake-desktop"' 'cask "handbrake"' 'cask "ported-app"' 'brew "git"' >"$candidate_brewfile"
+printf '%s\n' git HandBrake HandBrakeCLI >"$all_ports"
+printf '%s\n' git >"$active_ports"
+printf '%s\n' \
+	$'HandBrake\t0.10.0\t0\tmultimedia/HandBrake' \
+	$'HandBrakeCLI\t0.10.0\t0\tmultimedia/HandBrake' >"$port_info"
+printf '%s\n' \
+	'HandBrake seems to have been updated (port version: 0.10.0, new version: 1.11.2)' \
+	'HandBrakeCLI seems to be up to date' >"$port_livecheck"
+printf '%s\n' '[{"commit":{"committer":{"date":"2024-05-12T19:50:06Z"}}}]' >"$curl_response"
+: >"$audit_port_log"
+: >"$curl_log"
+: >"$sudo_log"
+output="$(MOCK_ARCH=arm64 MOCK_PORT_LOG="$audit_port_log" MOCK_CURL_LOG="$curl_log" BREW_PORT_CURL_BIN="$mock_curl" SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit --candidates --map "$candidate_map" "$candidate_brewfile")"
+contains 'MacPorts candidates: 6 suggestions for 3 casks (advisory)' "$output"
+contains 'cask handbrake-app:' "$output"
+contains 'cask handbrake-desktop:' "$output"
+contains 'cask handbrake:' "$output"
+not_contains 'cask git:' "$output"
+contains '1. HandBrake @0.10.0_0' "$output"
+contains 'upstream: seems to have been updated (port version: 0.10.0, new version: 1.11.2)' "$output"
+contains 'upstream: seems to be up to date' "$output"
+contains 'Portfile last changed: 2024-05-12' "$output"
+contains 'binary archive: not checked (run with --verify-archives)' "$output"
+not_contains 'cask ported-app:' "$output"
+grep -Fqx -- 'livecheck -v HandBrake HandBrakeCLI' "$audit_port_log" || fail 'Candidate audit did not batch verbose MacPorts livecheck.'
+[ "$(wc -l <"$curl_log")" -eq 1 ] || fail 'Candidate audit did not cache Portfile date lookups.'
+not_contains '-b archivefetch' "$(cat "$audit_port_log")"
+[ ! -s "$sudo_log" ] || fail 'Candidate audit without archive verification used sudo.'
+
+: >"$audit_port_log"
+: >"$sudo_log"
+output="$(MOCK_ARCH=arm64 MOCK_PORT_LOG="$audit_port_log" MOCK_CURL_LOG="$curl_log" BREW_PORT_CURL_BIN="$mock_curl" SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit --candidates --verify-archives --map "$candidate_map" "$candidate_brewfile")"
+contains 'binary archive: available (fetched or already cached)' "$output"
+grep -Fqx -- '-b archivefetch HandBrake' "$audit_port_log" || fail 'Archive verification did not use binary-only archivefetch.'
+grep -Fqx -- '-b archivefetch HandBrakeCLI' "$audit_port_log" || fail 'Archive verification did not check every candidate.'
+grep -Fqx -- '-v' "$sudo_log" || fail 'Archive verification did not acquire the MacPorts sudo lease.'
+grep -Fqx -- "-n $mock_port -b archivefetch HandBrake" "$sudo_log" || fail 'Archive verification did not fetch HandBrake through sudo.'
+grep -Fqx -- "-n $mock_port -b archivefetch HandBrakeCLI" "$sudo_log" || fail 'Archive verification did not fetch HandBrakeCLI through sudo.'
+[ "$(wc -l <"$sudo_log")" -eq 3 ] || fail 'Archive verification did not reuse one sudo lease.'
+not_contains 'install ' "$(cat "$audit_port_log")"
+not_contains '-b archivefetch git' "$(cat "$audit_port_log")"
+
+: >"$audit_port_log"
+: >"$sudo_log"
+output="$(MOCK_ARCH=arm64 MOCK_PORT_ARCHIVE_FAIL=HandBrake MOCK_PORT_LOG="$audit_port_log" MOCK_CURL_LOG="$curl_log" BREW_PORT_CURL_BIN="$mock_curl" SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit --candidates --verify-archives --map "$candidate_map" "$candidate_brewfile")"
+contains 'binary archive: unavailable for this MacPorts host' "$output"
+contains 'Result: coverage complete with warnings' "$output"
+
+output="$(MOCK_ARCH=arm64 MOCK_CURL_FAIL=1 BREW_PORT_CURL_BIN="$mock_curl" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit --candidates --map "$candidate_map" "$candidate_brewfile")"
+contains 'Portfile update date for multimedia/HandBrake is unknown: mock curl failure.' "$output"
+contains 'Result: coverage complete with warnings' "$output"
+if output="$("$utility" audit --verify-archives "$candidate_brewfile" 2>&1)"; then fail 'Archive verification without candidates unexpectedly succeeded.'; fi
+contains '--verify-archives requires --candidates.' "$output"
+
+inline_conditional_brewfile="$tmp_dir/inline-conditional.Brewfile"
+for declaration in 'if true; brew "not-installed-anywhere"; end' 'unless false; cask "missing-app"; end' 'case true; when true; mas "Missing App", id: 10002; end'; do
+	printf '%s\n' "$declaration" >"$inline_conditional_brewfile"
+	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$inline_conditional_brewfile" 2>&1)"; then fail 'Audit accepted an inline conditional declaration.'; fi
+	contains 'Brewfile declaration: Conditional Brewfile declaration is unsupported.' "$output"
+	contains 'Result: blocked' "$output"
+done
+
+malformed_audit_brewfile="$tmp_dir/malformed-audit.Brewfile"
+printf '%s\n' 'mas "Malformed App", id: invalid' >"$malformed_audit_brewfile"
+if output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$malformed_audit_brewfile" 2>&1)"; then fail 'Malformed audit declaration unexpectedly succeeded.'; fi
+contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
+contains 'Result: blocked' "$output"
+: >"$active_ports"
+: >"$all_ports"
 
 bad_map="$tmp_dir/bad.json"
 printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"bad","action":"fallback","target":"../escape.sh","architectures":["arm64"]}]}' >"$bad_map"
@@ -480,6 +722,12 @@ COMP_WORDS=(brew-port map '')
 COMP_CWORD=2
 _brew_port
 contains explain "${COMPREPLY[*]}"
+COMP_WORDS=(brew-port audit '')
+COMP_CWORD=2
+_brew_port
+contains --map "${COMPREPLY[*]}"
+contains --candidates "${COMPREPLY[*]}"
+contains --verify-archives "${COMPREPLY[*]}"
 COMP_WORDS=(brew-port completion uninstall '')
 COMP_CWORD=3
 _brew_port
@@ -502,6 +750,10 @@ touch "$completion_path_dir/My Brewfile" "$completion_path_dir/My Mapping"
 	COMP_CWORD=3
 	_brew_port
 	contains Brewfile "${COMPREPLY[*]}"
+	COMP_WORDS=(brew-port audit 'My ')
+	COMP_CWORD=2
+	_brew_port || true
+	has_candidate 'My Brewfile' "${COMPREPLY[@]}" || fail 'Bash completion split an audit Brewfile path containing spaces.'
 	COMP_WORDS=(brew-port install 'My ')
 	COMP_CWORD=2
 	_brew_port || true
@@ -665,6 +917,10 @@ if command -v fish >/dev/null 2>&1; then
 		contains fish "$fish_output"
 		contains zsh "$fish_output"
 	done
+	fish_output="$(fish -c 'source "$argv[1]"; complete -C "brew-port audit -"' "$repo_dir/completions/brew-port.fish")"
+	contains --map "$fish_output"
+	contains --candidates "$fish_output"
+	contains --verify-archives "$fish_output"
 fi
 
 mkdir -p "$(dirname "$bash_completion")"

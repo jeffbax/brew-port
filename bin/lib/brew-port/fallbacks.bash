@@ -136,6 +136,10 @@ bp_declaration_is_conditional() {
 	[[ "$1" =~ ^(if|unless)([[:space:]]|\() || "$1" =~ [[:space:]](if|unless)([[:space:]]|\() ]]
 }
 
+bp_declaration_looks_like_package() {
+	[[ "$1" =~ ^[[:space:]]*(brew|cask|mas)([[:space:]]|\() ]]
+}
+
 bp_run_manual_cask() {
 	local token="$1" detect="$2" path
 	if [ -n "$detect" ] && [ "$detect" != '[]' ]; then
@@ -152,6 +156,14 @@ bp_run_manual_cask() {
 	bp_gui "Install cask $token manually."
 }
 
+bp_terminate_process_tree() {
+	local signal="$1" pid="$2" child
+	if command -v pgrep >/dev/null 2>&1; then
+		while IFS= read -r child; do bp_terminate_process_tree "$signal" "$child"; done < <(pgrep -P "$pid" 2>/dev/null || true)
+	fi
+	kill "-$signal" "$pid" 2>/dev/null || true
+}
+
 bp_run_timed() {
 	local base="$1" timeout="$2" marker="$1.timeout" pid timer status elapsed
 	shift 2
@@ -159,6 +171,9 @@ bp_run_timed() {
 	"$@" >"$base.out" 2>"$base.err" &
 	pid=$!
 	(
+		# Bash 3.2 defers TERM while waiting for sleep unless the trap exits.
+		# Without this, successful bounded commands wait for the full timeout.
+		trap 'exit 0' TERM HUP INT
 		elapsed=0
 		while [ "$elapsed" -lt "$timeout" ]; do
 			sleep 1
@@ -166,7 +181,9 @@ bp_run_timed() {
 			elapsed=$((elapsed + 1))
 		done
 		: >"$marker"
-		kill -TERM "$pid" 2>/dev/null || true
+		bp_terminate_process_tree TERM "$pid"
+		sleep 1
+		kill -0 "$pid" 2>/dev/null && bp_terminate_process_tree KILL "$pid"
 	) &
 	timer=$!
 	if wait "$pid"; then status=0; else status=$?; fi
@@ -189,12 +206,25 @@ bp_plan_brewfiles() {
 				continue
 			fi
 			if [[ "$line" =~ ^[[:space:]]*(if|unless|case)([[:space:]]|\() ]]; then
+				# An opener can contain packages on the same line that parsing would skip.
+				if [ "${BP_STRICT_BREWFILE_PARSING:-false}" = true ]; then
+					bp_unresolved 'Brewfile declaration' 'Conditional Brewfile declaration is unsupported.'
+				fi
 				conditional_depth=$((conditional_depth + 1))
 				continue
 			fi
-			bp_parse_brewfile_declaration "$line" || continue
+			if ! bp_parse_brewfile_declaration "$line"; then
+				if [ "${BP_STRICT_BREWFILE_PARSING:-false}" = true ] && bp_declaration_looks_like_package "$line"; then
+					bp_unresolved 'Brewfile declaration' 'Unsupported brew, cask, or mas declaration.'
+				fi
+				continue
+			fi
 			if [ "$conditional_depth" -gt 0 ] || bp_declaration_is_conditional "$BP_DECLARATION_TRAILING"; then
 				bp_unresolved "$BP_DECLARATION_KIND $BP_DECLARATION_TOKEN" 'Conditional Brewfile declaration is unsupported.'
+				continue
+			fi
+			if [ "${BP_STRICT_BREWFILE_PARSING:-false}" = true ] && [[ "$BP_DECLARATION_TRAILING" =~ [^[:space:]] ]]; then
+				bp_unresolved "$BP_DECLARATION_KIND $BP_DECLARATION_TOKEN" 'Unsupported Brewfile options.'
 				continue
 			fi
 			printf '%s\t%s\t%s\n' "$BP_DECLARATION_KIND" "$BP_DECLARATION_TOKEN" "$BP_DECLARATION_NAME" >>"$raw"
@@ -292,7 +322,7 @@ bp_reconcile_mas() {
 	lookup_base="$BP_TMP_DIR/mas-lookup"
 	: >"$install_ids"
 	if bp_run_timed "$lookup_base" "$timeout" "$mas_bin" lookup --json "${ids[@]}"; then
-		if "$BP_JQ_BIN" -r '(.id // .trackId // .adamId // empty) | tostring' "$lookup_base.out" >"$valid_ids" 2>/dev/null; then
+		if "$BP_JQ_BIN" -r '(.id // .trackId // .adamID // .adamId // empty) | tostring' "$lookup_base.out" >"$valid_ids" 2>/dev/null; then
 			while IFS= read -r id; do
 				if grep -Fxq -- "$id" "$valid_ids"; then
 					printf '%s\n' "$id" >>"$install_ids"

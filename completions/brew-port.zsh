@@ -6,6 +6,7 @@ _brew_port() {
     'install:install Brewfile declarations through MacPorts'
     'update:update MacPorts and managed fallbacks'
     'refresh-fallbacks:refresh managed fallbacks'
+    'audit:audit Brewfile migration coverage without changes'
     'doctor:report prerequisites and mapping status'
     'version:print version'
     'map:manage mapping overrides'
@@ -26,6 +27,9 @@ _brew_port() {
       ;;
     update|refresh-fallbacks)
       _arguments -S '--dry-run[do not change the machine]' '--map=[mapping file]:map file:_files'
+      ;;
+    audit)
+      _arguments -S '--candidates[suggest MacPorts ports for unmapped casks]' '--verify-archives[download candidate binary archives to the MacPorts cache]' '--map=[mapping file]:map file:_files' '*:Brewfile:_files'
       ;;
     doctor|version)
       _arguments '--help[show help]' '-h[show help]'

@@ -19,9 +19,12 @@ source "$BP_BIN_DIR/lib/brew-port/maps.bash"
 source "$BP_BIN_DIR/lib/brew-port/reporting.bash"
 source "$BP_BIN_DIR/lib/brew-port/macports.bash"
 source "$BP_BIN_DIR/lib/brew-port/fallbacks.bash"
+source "$BP_BIN_DIR/lib/brew-port/audit.bash"
 
 BP_VERSION=0.1.0-rc.1
 BP_DRY_RUN=false
+BP_AUDIT_SHOW_CANDIDATES=false
+BP_AUDIT_VERIFY_ARCHIVES=false
 BP_COMPLETION_STARTUPS=()
 BP_COMPLETION_MARKER='# brew-port completion (managed)'
 BP_COMPLETION_BLOCK_START='# >>> brew-port completion >>>'
@@ -33,6 +36,7 @@ Usage:
   brew-port install [--dry-run] [--map FILE ...] BREWFILE...
   brew-port update [--dry-run] [--map FILE ...]
   brew-port refresh-fallbacks [--dry-run] [--map FILE ...]
+  brew-port audit [--candidates] [--verify-archives] [--map FILE ...] BREWFILE...
   brew-port doctor
   brew-port version | --version | -V
   brew-port map init | validate [--map FILE ...] | explain KIND TOKEN [--map FILE ...]
@@ -69,6 +73,19 @@ EOF
 Usage: brew-port refresh-fallbacks [--dry-run] [--map FILE ...]
 
 Refresh fallbacks recorded by earlier Brewfile installations.
+EOF
+		;;
+	audit)
+		cat <<'EOF'
+Usage: brew-port audit [--candidates] [--verify-archives] [--map FILE ...] BREWFILE...
+
+Read-only-by-default migration coverage for a Brewfile. It checks MacPorts targets, cask
+detection paths, and App Store IDs without installing packages or running fallbacks.
+
+--candidates adds advisory MacPorts suggestions for casks without a port mapping.
+--verify-archives requires --candidates and downloads suggested binary archives to
+the MacPorts cache without installing or activating them. It requests administrator
+access to write that cache.
 EOF
 		;;
 	doctor)
@@ -137,8 +154,8 @@ help_command() {
 }
 
 parse_options() {
-	local help_topic="$1" allow_dry_run="$2"
-	shift 2
+	local help_topic="$1" allow_dry_run="$2" allow_audit_candidates="$3"
+	shift 3
 	BP_REMAINING=()
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
@@ -151,6 +168,16 @@ parse_options() {
 			[ "$#" -ge 2 ] || bp_die '--map requires a file'
 			bp_add_map "$2"
 			shift 2
+			;;
+		--candidates)
+			[ "$allow_audit_candidates" = true ] || bp_die "--candidates is not supported by brew-port $help_topic"
+			BP_AUDIT_SHOW_CANDIDATES=true
+			shift
+			;;
+		--verify-archives)
+			[ "$allow_audit_candidates" = true ] || bp_die "--verify-archives is not supported by brew-port $help_topic"
+			BP_AUDIT_VERIFY_ARCHIVES=true
+			shift
 			;;
 		--help | -h)
 			usage_command "$help_topic"
@@ -191,8 +218,21 @@ prepare_mutating() {
 	bp_init_fallback_inventory
 }
 
+prepare_audit() {
+	bp_detect_host
+	bp_find_port
+	bp_find_jq
+	bp_require_macos
+	bp_require_native_execution
+	bp_require_port
+	[ -n "$BP_JQ_BIN" ] && [ -x "$BP_JQ_BIN" ] || bp_die 'jq is required to audit mappings. Install the MacPorts jq port first.'
+	bp_validate_maps
+	bp_make_effective_map
+	if "$BP_AUDIT_SHOW_CANDIDATES"; then bp_find_curl; fi
+}
+
 install_command() {
-	parse_options install true "$@"
+	parse_options install true false "$@"
 	[ "${#BP_REMAINING[@]}" -gt 0 ] || bp_die 'At least one Brewfile is required.'
 	local brewfile
 	for brewfile in "${BP_REMAINING[@]}"; do [ -f "$brewfile" ] || bp_die "Brewfile does not exist: $brewfile"; done
@@ -202,7 +242,7 @@ install_command() {
 }
 
 update_command() {
-	parse_options update true "$@"
+	parse_options update true false "$@"
 	[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'update does not accept Brewfiles.'
 	prepare_mutating
 	bp_selfupdate
@@ -217,12 +257,25 @@ update_command() {
 }
 
 refresh_command() {
-	parse_options refresh-fallbacks true "$@"
+	parse_options refresh-fallbacks true false "$@"
 	[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'refresh-fallbacks does not accept Brewfiles.'
 	prepare_mutating
 	bp_selfupdate
 	bp_refresh_fallbacks
 	bp_report
+}
+
+audit_command() {
+	parse_options audit false true "$@"
+	if "$BP_AUDIT_VERIFY_ARCHIVES" && ! "$BP_AUDIT_SHOW_CANDIDATES"; then
+		bp_die '--verify-archives requires --candidates.'
+	fi
+	[ "${#BP_REMAINING[@]}" -gt 0 ] || bp_die 'At least one Brewfile is required.'
+	local brewfile
+	for brewfile in "${BP_REMAINING[@]}"; do [ -f "$brewfile" ] || bp_die "Brewfile does not exist: $brewfile"; done
+	prepare_audit
+	bp_audit_brewfiles "${BP_REMAINING[@]}"
+	bp_audit_report
 }
 
 doctor_command() {
@@ -301,7 +354,7 @@ map_command() {
 		bp_log "Created $BP_USER_MAP and $parent/fallbacks/."
 		;;
 	validate)
-		parse_options map-validate false "$@"
+		parse_options map-validate false false "$@"
 		[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'map validate accepts only --map.'
 		BP_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/brew-port.XXXXXX")"
 		trap bp_cleanup EXIT HUP INT TERM
@@ -309,7 +362,7 @@ map_command() {
 		bp_log 'Mappings are valid.'
 		;;
 	explain)
-		parse_options map-explain false "$@"
+		parse_options map-explain false false "$@"
 		[ "${#BP_REMAINING[@]}" -eq 2 ] || bp_die 'Usage: brew-port map explain [--map FILE ...] KIND TOKEN'
 		local kind="${BP_REMAINING[0]}" token="${BP_REMAINING[1]}"
 		BP_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/brew-port.XXXXXX")"
@@ -538,6 +591,7 @@ case "$command_name" in
 install) install_command "$@" ;;
 update) update_command "$@" ;;
 refresh-fallbacks) refresh_command "$@" ;;
+audit) audit_command "$@" ;;
 doctor) doctor_command "$@" ;;
 version | --version | -V)
 	case "${1:-}" in

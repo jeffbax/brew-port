@@ -34,6 +34,7 @@ end
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'install' -d 'Install Brewfile declarations through MacPorts'
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'update' -d 'Update MacPorts and managed fallbacks'
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'refresh-fallbacks' -d 'Refresh managed fallbacks'
+complete -c brew-port -f -n '__fish_use_subcommand' -a 'audit' -d 'Audit Brewfile migration coverage without changes'
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'doctor' -d 'Report prerequisites and mapping status'
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'version' -d 'Print the version'
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'map' -d 'Manage mapping overrides'
@@ -49,6 +50,10 @@ complete -c brew-port -n '__fish_brew_port_command update' -l dry-run -d 'Do not
 complete -c brew-port -n '__fish_brew_port_command update' -l map -r -F -d 'Mapping file'
 complete -c brew-port -n '__fish_brew_port_command refresh-fallbacks' -l dry-run -d 'Do not change the machine'
 complete -c brew-port -n '__fish_brew_port_command refresh-fallbacks' -l map -r -F -d 'Mapping file'
+complete -c brew-port -n '__fish_brew_port_command audit' -l candidates -d 'Suggest MacPorts ports for unmapped casks'
+complete -c brew-port -n '__fish_brew_port_command audit' -l verify-archives -d 'Download candidate binary archives to the MacPorts cache'
+complete -c brew-port -n '__fish_brew_port_command audit' -l map -r -F -d 'Mapping file'
+complete -c brew-port -n '__fish_brew_port_command audit' -F
 
 complete -c brew-port -n '__fish_brew_port_map_subcommand' -a 'init' -d 'Create the default user mapping'
 complete -c brew-port -n '__fish_brew_port_map_subcommand' -a 'validate' -d 'Validate mapping files'
@@ -58,6 +63,7 @@ complete -c brew-port -n '__fish_brew_port_command map' -l map -r -F -d 'Mapping
 complete -c brew-port -n '__fish_brew_port_help' -a 'install' -d 'Install Brewfile declarations'
 complete -c brew-port -n '__fish_brew_port_help' -a 'update' -d 'Update MacPorts'
 complete -c brew-port -n '__fish_brew_port_help' -a 'refresh-fallbacks' -d 'Refresh managed fallbacks'
+complete -c brew-port -n '__fish_brew_port_help' -a 'audit' -d 'Audit Brewfile migration coverage'
 complete -c brew-port -n '__fish_brew_port_help' -a 'doctor' -d 'Report prerequisites'
 complete -c brew-port -n '__fish_brew_port_help' -a 'version' -d 'Print the version'
 complete -c brew-port -n '__fish_brew_port_help' -a 'map' -d 'Manage mapping overrides'

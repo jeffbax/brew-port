@@ -10,7 +10,7 @@ _brew_port() {
 	prev="${COMP_WORDS[COMP_CWORD - 1]}"
 	command="${COMP_WORDS[1]:-}"
 	if [ "$COMP_CWORD" -eq 1 ]; then
-		COMPREPLY=($(compgen -W 'install update refresh-fallbacks doctor version map completion help --help -h --version -V' -- "$cur"))
+		COMPREPLY=($(compgen -W 'install update refresh-fallbacks audit doctor version map completion help --help -h --version -V' -- "$cur"))
 		return
 	fi
 	case "$command" in
@@ -26,11 +26,23 @@ _brew_port() {
 			esac
 		fi
 		;;
+	audit)
+		if [ "$prev" = --map ]; then
+			COMPREPLY=()
+			_brew_port_append_files "$cur"
+		else
+			COMPREPLY=($(compgen -W '--candidates --verify-archives --map --help -h' -- "$cur"))
+			case "$cur" in
+			-*) ;;
+			*) _brew_port_append_files "$cur" ;;
+			esac
+		fi
+		;;
 	update | refresh-fallbacks) COMPREPLY=($(compgen -W '--dry-run --map --help -h' -- "$cur")) ;;
 	doctor | version) COMPREPLY=($(compgen -W '--help -h' -- "$cur")) ;;
 	help)
 		if [ "$COMP_CWORD" -eq 2 ]; then
-			COMPREPLY=($(compgen -W 'install update refresh-fallbacks doctor version map completion' -- "$cur"))
+			COMPREPLY=($(compgen -W 'install update refresh-fallbacks audit doctor version map completion' -- "$cur"))
 		elif [ "${COMP_WORDS[2]:-}" = map ]; then
 			COMPREPLY=($(compgen -W 'init validate explain' -- "$cur"))
 		elif [ "${COMP_WORDS[2]:-}" = completion ]; then COMPREPLY=($(compgen -W 'install uninstall' -- "$cur")); fi
