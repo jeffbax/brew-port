@@ -118,12 +118,30 @@ shift
 [ "${MOCK_MAS_FAIL_COMMAND:-}" != "$command" ] || { printf 'mock MAS %s failed\n' "$command" >&2; exit 1; }
 case "$command" in
 list)
-	for id in "$@"; do grep -Fxq -- "$id" "${MOCK_MAS_INSTALLED:?}" && printf '%s Mock App (1.0)\n' "$id"; done
-	true
+	status=0
+	for id in "$@"; do
+		if grep -Fxq -- "$id" "${MOCK_MAS_INSTALLED:?}"; then
+			printf '%s Mock App (1.0)\n' "$id"
+		elif [ "${MOCK_MAS_PER_ID_ERRORS:-0}" = 1 ]; then
+			printf 'Error: No installed apps with ADAM ID %s\n' "$id" >&2
+			status=1
+		fi
+	done
+	exit "$status"
 	;;
 lookup)
 	[ "${1:-}" = --json ] && shift
-	for id in "$@"; do [ "${MOCK_MAS_INVALID:-}" = "$id" ] || printf '{"adamID":%s}\n' "$id"; done
+	status=0
+	for id in "$@"; do
+		if [ "${MOCK_MAS_INVALID:-}" != "$id" ]; then
+			printf '{"adamID":%s}\n' "$id"
+		elif [ "${MOCK_MAS_PER_ID_ERRORS:-0}" = 1 ]; then
+			printf 'Error: No apps found in the App Store for ADAM ID %s\n' "$id" >&2
+			status=1
+		fi
+	done
+	[ "${MOCK_MAS_LOOKUP_SERVICE_ERROR:-0}" != 1 ] || { printf 'Error: Network connection failed\n' >&2; status=1; }
+	exit "$status"
 	;;
 install)
 	[ "${MOCK_MAS_FAIL_INSTALL:-0}" != 1 ] || { echo 'mock MAS install failed' >&2; exit 1; }
@@ -397,6 +415,24 @@ grep -Fqx 'lookup --json 10001 10002 10003' "$audit_mas_log" || fail 'Audit did 
 [ ! -s "$sudo_log" ] || fail 'Audit used sudo.'
 [ ! -s "$mas_log" ] || fail 'Audit invoked MAS installation.'
 [ ! -e "$tmp_dir/audit-state/brew-port" ] || fail 'Audit wrote fallback state.'
+
+partial_mas_brewfile="$tmp_dir/partial-mas.Brewfile"
+printf '%s\n' 'mas "Installed App", id: 10001' 'mas "Missing App", id: 937984704' 'mas "Invalid App", id: 100000000000000' >"$partial_mas_brewfile"
+if output="$(PATH="$tmp_dir:$PATH" MOCK_ARCH=arm64 MOCK_MAS_PER_ID_ERRORS=1 MOCK_MAS_INVALID=100000000000000 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$partial_mas_brewfile" 2>&1)"; then fail 'Audit accepted missing and invalid apps from partial MAS batches.'; fi
+contains 'Mac App Store apps: installed 1, missing 1, invalid 1, unknown 0' "$output"
+contains 'Missing App (937984704): Mac App Store app is not installed.' "$output"
+contains 'Invalid App (100000000000000): Mac App Store ID is unavailable.' "$output"
+not_contains 'scan failed' "$output"
+contains 'Result: blocked' "$output"
+
+printf '%s\n' 'mas "Invalid App", id: 100000000000000' >"$partial_mas_brewfile"
+if output="$(PATH="$tmp_dir:$PATH" MOCK_ARCH=arm64 MOCK_MAS_PER_ID_ERRORS=1 MOCK_MAS_INVALID=100000000000000 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$partial_mas_brewfile" 2>&1)"; then fail 'Audit accepted an unavailable MAS ID.'; fi
+contains 'Mac App Store apps: installed 0, missing 0, invalid 1, unknown 0' "$output"
+
+if output="$(PATH="$tmp_dir:$PATH" MOCK_ARCH=arm64 MOCK_MAS_PER_ID_ERRORS=1 MOCK_MAS_INVALID=100000000000000 MOCK_MAS_LOOKUP_SERVICE_ERROR=1 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$partial_mas_brewfile" 2>&1)"; then fail 'A service error hid an explicitly unavailable MAS ID.'; fi
+contains 'Mac App Store apps: installed 0, missing 0, invalid 1, unknown 0' "$output"
+contains 'Availability scan failed' "$output"
+contains 'Result: blocked' "$output"
 
 audit_options_brewfile="$tmp_dir/audit-options.Brewfile"
 printf '%s\n' 'brew "llvm", args: ["with-clang"]' >"$audit_options_brewfile"

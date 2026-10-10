@@ -305,6 +305,9 @@ bp_audit_mas() {
 	[ -s "$BP_AUDIT_MAS_PLAN" ] || return 0
 	local mas_bin timeout list_base lookup_base id name label list_ok=false lookup_ok=false
 	local all_ids="$BP_TMP_DIR/audit-mas-all" installed_ids="$BP_TMP_DIR/audit-mas-installed-ids" valid_ids="$BP_TMP_DIR/audit-mas-valid-ids"
+	local missing_ids="$BP_TMP_DIR/audit-mas-missing-ids" invalid_ids="$BP_TMP_DIR/audit-mas-invalid-ids"
+	: >"$missing_ids"
+	: >"$invalid_ids"
 	mas_bin="$(bp_command_path mas)"
 	if [ -z "$mas_bin" ]; then
 		while IFS=$'\t' read -r id name; do bp_audit_record "$(bp_audit_mas_label "$id" "$name")" 'MAS client is unavailable.' "$BP_AUDIT_MAS_UNKNOWN"; done <"$BP_AUDIT_MAS_PLAN"
@@ -318,45 +321,47 @@ bp_audit_mas() {
 	while IFS= read -r id; do ids+=("$id"); done <"$all_ids"
 	list_base="$BP_TMP_DIR/audit-mas-list"
 	if bp_run_timed "$list_base" "$timeout" "$mas_bin" list "${ids[@]}"; then
-		bp_mas_ids_from_list "$list_base.out" >"$installed_ids"
 		list_ok=true
 	elif [ -e "$list_base.timeout" ]; then
-		: >"$installed_ids"
 		bp_audit_warn mas "Installed-app scan timed out after ${timeout}s; installed state is unknown."
 	elif grep -Fq 'No installed apps found' "$list_base.err" "$list_base.out"; then
-		: >"$installed_ids"
 		list_ok=true
 	else
-		: >"$installed_ids"
-		local detail
-		detail="$(bp_audit_command_detail "$list_base.err" "$list_base.out" || true)"
-		bp_audit_warn mas "Installed-app scan failed${detail:+: $detail}; installed state is unknown."
+		sed -nE 's/.*No installed apps with ADAM ID ([0-9]+).*/\1/p' "$list_base.err" >"$missing_ids"
+		if [ ! -s "$missing_ids" ] || grep -Evq 'No installed apps with ADAM ID [0-9]+|^[[:space:]]*$' "$list_base.err"; then
+			local detail
+			detail="$(bp_audit_command_detail "$list_base.err" "$list_base.out" || true)"
+			bp_audit_warn mas "Installed-app scan failed${detail:+: $detail}; installed state is unknown."
+		fi
 	fi
+	# MAS can return useful stdout and per-ID errors in the same failed batch.
+	bp_mas_ids_from_list "$list_base.out" >"$installed_ids"
 	lookup_base="$BP_TMP_DIR/audit-mas-lookup"
 	if bp_run_timed "$lookup_base" "$timeout" "$mas_bin" lookup --json "${ids[@]}"; then
-		if "$BP_JQ_BIN" -r '(.id // .trackId // .adamID // .adamId // empty) | tostring' "$lookup_base.out" >"$valid_ids" 2>/dev/null; then
-			lookup_ok=true
-		else
-			: >"$valid_ids"
-			bp_audit_warn mas 'Availability results could not be parsed; App Store availability is unknown.'
-		fi
+		lookup_ok=true
 	elif [ -e "$lookup_base.timeout" ]; then
-		: >"$valid_ids"
 		bp_audit_warn mas "Availability scan timed out after ${timeout}s; App Store availability is unknown."
 	else
+		sed -nE 's/.*No apps found in the App Store for ADAM ID ([0-9]+).*/\1/p' "$lookup_base.err" >"$invalid_ids"
+		if [ ! -s "$invalid_ids" ] || grep -Evq 'No apps found in the App Store for ADAM ID [0-9]+|^[[:space:]]*$' "$lookup_base.err"; then
+			local detail
+			detail="$(bp_audit_command_detail "$lookup_base.err" "$lookup_base.out" || true)"
+			bp_audit_warn mas "Availability scan failed${detail:+: $detail}; App Store availability is unknown."
+		fi
+	fi
+	if ! "$BP_JQ_BIN" -r '(.id // .trackId // .adamID // .adamId // empty) | tostring' "$lookup_base.out" >"$valid_ids" 2>/dev/null; then
 		: >"$valid_ids"
-		local detail
-		detail="$(bp_audit_command_detail "$lookup_base.err" "$lookup_base.out" || true)"
-		bp_audit_warn mas "Availability scan failed${detail:+: $detail}; App Store availability is unknown."
+		lookup_ok=false
+		bp_audit_warn mas 'Availability results could not be parsed; App Store availability is unknown.'
 	fi
 	while IFS=$'\t' read -r id name; do
 		label="$(bp_audit_mas_label "$id" "$name")"
-		if "$lookup_ok" && ! grep -Fxq -- "$id" "$valid_ids"; then
+		if grep -Fxq -- "$id" "$invalid_ids" || { "$lookup_ok" && ! grep -Fxq -- "$id" "$valid_ids"; }; then
 			bp_audit_record "$label" 'Mac App Store ID is unavailable.' "$BP_AUDIT_MAS_INVALID"
 			bp_audit_block "$label" 'Mac App Store ID is unavailable.'
-		elif "$list_ok" && grep -Fxq -- "$id" "$installed_ids"; then
+		elif grep -Fxq -- "$id" "$installed_ids"; then
 			bp_audit_record "$label" 'installed' "$BP_AUDIT_MAS_INSTALLED"
-		elif "$lookup_ok" && "$list_ok"; then
+		elif { "$lookup_ok" || grep -Fxq -- "$id" "$valid_ids"; } && { "$list_ok" || grep -Fxq -- "$id" "$missing_ids"; }; then
 			bp_audit_record "$label" 'not installed' "$BP_AUDIT_MAS_MISSING"
 			bp_audit_block "$label" 'Mac App Store app is not installed.'
 		else
