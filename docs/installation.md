@@ -41,4 +41,6 @@ This repository uses GitHub immutable releases: after publication, the associate
 
 `install`, `update`, and `refresh-fallbacks` require jq to read mappings. When jq is absent, package-changing commands selfupdate MacPorts and install its jq port under the same sudo lease. `doctor` and `map` remain non-mutating and report the missing prerequisite.
 
-`brew-port update` selfupdates MacPorts, upgrades outdated ports, and refreshes managed fallbacks. It does not upgrade the brew-port CLI; install another verified release archive to do that.
+Mise mappings require an existing mise installation. If mise is unavailable, `install` and `update` stop before package reconciliation and print installation choices: MacPorts (`sudo port install mise`) or the [official installer](https://mise.jdx.dev/installing-mise.html) (`curl -fsSL https://mise.run | sh`). Make mise available on PATH or set `BREW_PORT_MISE_BIN` to its executable path, then retry the original command. Dry-run prints the instructions and continues showing planned actions. Map preparation, including jq bootstrap, still runs first. Tool installation does not require shell activation; direct terminal use does. See [mise mappings and shell setup](mappings.md#mise-managed-cli-tools).
+
+`brew-port update` selfupdates MacPorts, upgrades outdated ports and mapped global mise tools, and refreshes managed fallbacks. It does not upgrade the brew-port CLI; install another verified release archive to do that.

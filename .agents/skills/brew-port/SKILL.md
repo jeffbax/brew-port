@@ -14,4 +14,6 @@ Use this skill when changing a brew-port mapping or fallback.
 4. Run `brew-port map validate --map FILE`, then `brew-port install --dry-run --map FILE BREWFILE` before a real install.
 5. Use `brew-port map explain KIND TOKEN` to verify precedence and retain the reason for an override.
 
+For `mise` mappings, use a tool identifier in `target`; keep version constraints in global mise configuration. Users must install mise through MacPorts or the official installer before retrying a stopped install/update; dry-run prints missing-prerequisite instructions and continues. Direct shell use requires mise activation or shims on PATH.
+
 Mappings are persistent user configuration. Do not save detected architecture, MacPorts prefix, or other host facts in them.

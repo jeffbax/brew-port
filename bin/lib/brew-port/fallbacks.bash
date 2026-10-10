@@ -11,6 +11,10 @@ EOF
 	note="$(bp_decode_mapping_note "$note")"
 	case "$action" in
 	port) bp_install_port "$token" "$target" ;;
+	mise)
+		bp_ensure_mise
+		bp_install_mise "$token" "$target"
+		;;
 	skip) bp_unresolved "$token" "$note" ;;
 	manual) bp_run_manual_cask "$token" "$detect" ;;
 	fallback | fallback-root)
@@ -209,10 +213,12 @@ bp_prepare_execution_plan() {
 	BP_FALLBACK_PLAN="$BP_TMP_DIR/fallback-plan"
 	BP_CASK_PLAN="$BP_TMP_DIR/cask-plan"
 	BP_MAS_PLAN="$BP_TMP_DIR/mas-plan"
+	BP_MISE_PLAN="$BP_TMP_DIR/mise-plan"
 	: >"$BP_PORT_PLAN"
 	: >"$BP_FALLBACK_PLAN"
 	: >"$BP_CASK_PLAN"
 	: >"$BP_MAS_PLAN"
+	: >"$BP_MISE_PLAN"
 	while IFS=$'\t' read -r kind token name; do
 		case "$kind" in
 		mas)
@@ -233,6 +239,7 @@ bp_prepare_execution_plan() {
 $row
 EOF
 		case "$action" in
+		mise) printf '%s\t%s\n' "$token" "$target" >>"$BP_MISE_PLAN" ;;
 		port) printf '%s\t%s\n' "$token" "$target" >>"$BP_PORT_PLAN" ;;
 		fallback | fallback-root) printf '%s\t%s\n' "$kind" "$token" >>"$BP_FALLBACK_PLAN" ;;
 		manual) printf '%s\t%s\n' "$token" "$detect" >>"$BP_CASK_PLAN" ;;
@@ -253,11 +260,25 @@ bp_mas_ids_from_list() {
 
 bp_reconcile_mas() {
 	[ -s "$BP_MAS_PLAN" ] || return 0
-	local mas_bin timeout list_base lookup_base install_base verify_base id status detail
+	local mas_bin row action target timeout list_base lookup_base install_base verify_base id status detail
 	local all_ids="$BP_TMP_DIR/mas-all" installed_ids="$BP_TMP_DIR/mas-installed" missing_ids="$BP_TMP_DIR/mas-missing"
 	local valid_ids="$BP_TMP_DIR/mas-valid" install_ids="$BP_TMP_DIR/mas-install"
+	local -a mas_command=()
 	mas_bin="$(command -v mas 2>/dev/null || true)"
-	if [ -z "$mas_bin" ]; then
+	row="$(bp_lookup_mapping brew mas || true)"
+	IFS=$'\034' read -r action target _ <<EOF
+$row
+EOF
+	if [ "$action" = mise ]; then
+		bp_find_mise
+		if "$BP_DRY_RUN" || { [ -n "$BP_MISE_BIN" ] && [ -x "$BP_MISE_BIN" ]; }; then
+			# A newly installed mise client does not need parent-shell activation.
+			mas_command=(bp_mise exec "$target" -- mas)
+		fi
+	elif [ -n "$mas_bin" ]; then
+		mas_command=("$mas_bin")
+	fi
+	if [ "${#mas_command[@]}" -eq 0 ]; then
 		while IFS=$'\t' read -r id _; do bp_action_failed "$(bp_mas_label "$id")" 'mas client is unavailable.'; done <"$BP_MAS_PLAN"
 		return 0
 	fi
@@ -271,7 +292,7 @@ bp_reconcile_mas() {
 	list_base="$BP_TMP_DIR/mas-list"
 	local -a ids=()
 	while IFS= read -r id; do ids+=("$id"); done <"$all_ids"
-	if bp_run_timed "$list_base" "$timeout" "$mas_bin" list "${ids[@]}"; then
+	if bp_run_timed "$list_base" "$timeout" "${mas_command[@]}" list "${ids[@]}"; then
 		bp_mas_ids_from_list "$list_base.out" >"$installed_ids"
 	elif [ -e "$list_base.timeout" ]; then
 		: >"$installed_ids"
@@ -291,7 +312,7 @@ bp_reconcile_mas() {
 	while IFS= read -r id; do ids+=("$id"); done <"$missing_ids"
 	lookup_base="$BP_TMP_DIR/mas-lookup"
 	: >"$install_ids"
-	if bp_run_timed "$lookup_base" "$timeout" "$mas_bin" lookup --json "${ids[@]}"; then
+	if bp_run_timed "$lookup_base" "$timeout" "${mas_command[@]}" lookup --json "${ids[@]}"; then
 		if "$BP_JQ_BIN" -r '(.id // .trackId // .adamId // empty) | tostring' "$lookup_base.out" >"$valid_ids" 2>/dev/null; then
 			while IFS= read -r id; do
 				if grep -Fxq -- "$id" "$valid_ids"; then
@@ -315,9 +336,9 @@ bp_reconcile_mas() {
 	ids=()
 	while IFS= read -r id; do ids+=("$id"); done <"$install_ids"
 	install_base="$BP_TMP_DIR/mas-install"
-	if bp_run_timed "$install_base" "$timeout" "$mas_bin" install "${ids[@]}"; then
+	if bp_run_timed "$install_base" "$timeout" "${mas_command[@]}" install "${ids[@]}"; then
 		verify_base="$BP_TMP_DIR/mas-verify"
-		if bp_run_timed "$verify_base" "$timeout" "$mas_bin" list "${ids[@]}"; then
+		if bp_run_timed "$verify_base" "$timeout" "${mas_command[@]}" list "${ids[@]}"; then
 			bp_mas_ids_from_list "$verify_base.out" >"$installed_ids"
 			while IFS= read -r id; do
 				if grep -Fxq -- "$id" "$installed_ids"; then bp_installed "$(bp_mas_label "$id")"; else bp_action_failed "$(bp_mas_label "$id")" 'Install completed but the app is still missing.'; fi
@@ -335,9 +356,11 @@ bp_reconcile_mas() {
 }
 
 bp_reconcile_brewfiles() {
-	local kind token detect
+	local kind token detect target
 	bp_plan_brewfiles "$@"
 	bp_prepare_execution_plan
+	# Check before reconciling other packages so installing mise and retrying is enough.
+	if [ -s "$BP_MISE_PLAN" ]; then bp_ensure_mise; fi
 	if [ -s "$BP_PORT_PLAN" ]; then
 		bp_snapshot_active_ports
 		bp_install_port_plan "$BP_PORT_PLAN"
@@ -346,6 +369,7 @@ bp_reconcile_brewfiles() {
 		bp_selfupdate
 		while IFS=$'\t' read -r kind token; do bp_run_mapping "$kind" "$token"; done <"$BP_FALLBACK_PLAN"
 	fi
+	while IFS=$'\t' read -r token target; do bp_install_mise "$token" "$target"; done <"$BP_MISE_PLAN"
 	while IFS=$'\t' read -r token detect; do bp_run_manual_cask "$token" "$detect"; done <"$BP_CASK_PLAN"
 	bp_reconcile_mas
 }

@@ -3,8 +3,8 @@
 _brew_port() {
   local -a commands
   commands=(
-    'install:install Brewfile declarations through MacPorts'
-    'update:update MacPorts and managed fallbacks'
+    'install:install Brewfile declarations through MacPorts and mise'
+    'update:update MacPorts, mapped mise tools, and managed fallbacks'
     'refresh-fallbacks:refresh managed fallbacks'
     'doctor:report prerequisites and mapping status'
     'version:print version'

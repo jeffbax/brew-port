@@ -31,8 +31,8 @@ function __fish_brew_port_help
     test (count $words) -eq 2; and test "$words[2]" = help
 end
 
-complete -c brew-port -f -n '__fish_use_subcommand' -a 'install' -d 'Install Brewfile declarations through MacPorts'
-complete -c brew-port -f -n '__fish_use_subcommand' -a 'update' -d 'Update MacPorts and managed fallbacks'
+complete -c brew-port -f -n '__fish_use_subcommand' -a 'install' -d 'Install Brewfile declarations through MacPorts and mise'
+complete -c brew-port -f -n '__fish_use_subcommand' -a 'update' -d 'Update MacPorts, mapped mise tools, and managed fallbacks'
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'refresh-fallbacks' -d 'Refresh managed fallbacks'
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'doctor' -d 'Report prerequisites and mapping status'
 complete -c brew-port -f -n '__fish_use_subcommand' -a 'version' -d 'Print the version'
@@ -56,7 +56,7 @@ complete -c brew-port -n '__fish_brew_port_map_subcommand' -a 'explain' -d 'Expl
 complete -c brew-port -n '__fish_brew_port_command map' -l map -r -F -d 'Mapping file'
 
 complete -c brew-port -n '__fish_brew_port_help' -a 'install' -d 'Install Brewfile declarations'
-complete -c brew-port -n '__fish_brew_port_help' -a 'update' -d 'Update MacPorts'
+complete -c brew-port -n '__fish_brew_port_help' -a 'update' -d 'Update MacPorts and mapped mise tools'
 complete -c brew-port -n '__fish_brew_port_help' -a 'refresh-fallbacks' -d 'Refresh managed fallbacks'
 complete -c brew-port -n '__fish_brew_port_help' -a 'doctor' -d 'Report prerequisites'
 complete -c brew-port -n '__fish_brew_port_help' -a 'version' -d 'Print the version'

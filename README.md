@@ -1,6 +1,6 @@
 # brew-port
 
-`brew-port` translates Homebrew Brewfile declarations into MacPorts actions on macOS. It never installs Homebrew or chooses a package manager.
+`brew-port` translates Homebrew Brewfile declarations into MacPorts and explicitly mapped mise actions on macOS. It never installs Homebrew or chooses a package manager.
 
 ## Install
 
@@ -24,7 +24,7 @@ brew-port install Brewfile --dry-run
 brew-port install Brewfile
 ```
 
-Update MacPorts packages and refresh previously requested fallbacks:
+Update MacPorts packages, mapped global mise tools, and previously requested fallbacks:
 
 ```sh
 brew-port update

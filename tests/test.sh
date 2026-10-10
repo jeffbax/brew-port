@@ -672,6 +672,167 @@ printf '%s\n' '# user completion' >"$bash_completion"
 if output="$(HOME="$completion_home" XDG_DATA_HOME="$completion_data" "$utility" completion install bash 2>&1)"; then fail 'Unmanaged completion was overwritten.'; fi
 contains 'Refusing to replace non-brew-port completion' "$output"
 
+# Mise mocks stay off PATH to exercise discovery and internal exec behavior.
+mise_log="$tmp_dir/mise.log"
+mise_state="$tmp_dir/mise-state.json"
+mock_mise="$tmp_dir/mise-template"
+cat >"$mock_mise" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${MOCK_MISE_LOG:?}"
+[ "$PWD" -ef "${MISE_CEILING_PATHS:?}" ] || exit 90
+[ "$PWD" = "$(pwd -P)" ] || exit 94
+[ -z "${MISE_AGENT_VERSION:-}" ] || exit 93
+case "$1" in
+ls)
+  target="$4"
+  [ "${MOCK_MISE_BAD_JSON:-false}" != true ] || { echo broken; exit 0; }
+  jq --arg tool "$target" '.[$tool] // []' "$MOCK_MISE_STATE"
+  ;;
+use)
+  [ "${MOCK_MISE_FAIL:-}" != use ] || exit 1
+  target="${4%@latest}"
+  jq --arg tool "$target" '.[$tool] = [{installed:true,requested_version:"latest"}]' "$MOCK_MISE_STATE" >"$MOCK_MISE_STATE.tmp"
+  mv "$MOCK_MISE_STATE.tmp" "$MOCK_MISE_STATE"
+  ;;
+install)
+  [ "${MOCK_MISE_FAIL:-}" != install ] || exit 1
+  jq --arg tool "$2" '.[$tool] |= map(.installed = true)' "$MOCK_MISE_STATE" >"$MOCK_MISE_STATE.tmp"
+  mv "$MOCK_MISE_STATE.tmp" "$MOCK_MISE_STATE"
+  ;;
+upgrade)
+  if [ "$2" = --help ]; then
+    [ "${MOCK_MISE_OLD:-false}" = true ] || echo --global
+  else
+    [ "$2" = --global ] || exit 91
+    [ "${MOCK_MISE_FAIL:-}" != upgrade ] || exit 1
+  fi
+  ;;
+exec)
+  [ "$2 $3 $4" = 'mas -- mas' ] || exit 92
+  shift 4
+  exec "$MOCK_MISE_MAS" "$@"
+  ;;
+*) exit 2 ;;
+esac
+EOF
+chmod +x "$mock_mise"
+mise_map="$tmp_dir/mise-mappings.json"
+cat >"$mise_map" <<'EOF'
+{"version":1,"mappings":[
+ {"kind":"brew","token":"agent","action":"mise","target":"agent"},
+ {"kind":"cask","token":"agent-alias","action":"mise","target":"agent"},
+ {"kind":"brew","token":"missing-agent","action":"mise","target":"missing-agent"},
+ {"kind":"brew","token":"mas","action":"mise","target":"mas"},
+ {"kind":"brew","token":"absent-agent","action":"mise","target":"absent-agent"},
+ {"kind":"brew","token":"scoped-agent","action":"mise","target":"npm:@vendor/agent"}
+]}
+EOF
+mise_brewfile="$tmp_dir/mise.Brewfile"
+printf '%s\n' 'brew "agent"' 'cask "agent-alias"' 'brew "missing-agent"' >"$mise_brewfile"
+export MOCK_MISE_LOG="$mise_log" MOCK_MISE_STATE="$mise_state" MOCK_MISE_MAS="$mock_mas"
+"$utility" map validate --map "$mise_map" >/dev/null
+output="$("$utility" map explain --map "$mise_map" brew agent)"
+contains 'mise -> agent' "$output"
+for invalid_target in '' '--global' 'agent@1' 'agent tool' 'agent[postinstall=bad]'; do
+	jq --arg target "$invalid_target" '.mappings[0].target = $target' "$mise_map" >"$tmp_dir/invalid-mise.json"
+	if "$utility" map validate --map "$tmp_dir/invalid-mise.json" >/dev/null 2>&1; then fail "Accepted invalid mise target: $invalid_target"; fi
+done
+mise_run() {
+	MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" BREW_PORT_MISE_BIN="$mock_mise" "$utility" "$@"
+}
+printf '%s\n' '{"agent":[{"installed":true,"requested_version":"1.2.3"}],"missing-agent":[{"installed":false,"requested_version":"2"}],"unmapped":[{"installed":true,"requested_version":"latest"}]}' >"$mise_state"
+: >"$mise_log"
+: >"$sudo_log"
+output="$(MISE_AGENT_VERSION=999 MISE_SHELL='' SHELL=/bin/zsh mise_run install --map "$mise_map" "$mise_brewfile")"
+contains 'Already present: 2' "$output"
+contains 'mise: 2' "$output"
+contains 'activate zsh' "$output"
+contains 'install missing-agent' "$(cat "$mise_log")"
+not_contains 'use --global' "$(cat "$mise_log")"
+[ "$(jq -r '.agent[0].requested_version' "$mise_state")" = 1.2.3 ] || fail 'Existing mise version was changed.'
+[ ! -s "$sudo_log" ] || fail 'Mise tools requested sudo.'
+: >"$mise_log"
+output="$(mise_run update --map "$mise_map")"
+contains 'upgrade --global agent missing-agent' "$(cat "$mise_log")"
+not_contains 'unmapped' "$(cat "$mise_log")"
+not_contains 'use --global' "$(cat "$mise_log")"
+[ "$(grep -c '^upgrade --global' "$mise_log")" -eq 1 ] || fail 'Mise targets were upgraded more than once.'
+if output="$(MOCK_MISE_OLD=true mise_run update --map "$mise_map" 2>&1)"; then fail 'Old mise global upgrade unexpectedly succeeded.'; fi
+contains 'mise upgrade --global is required' "$output"
+if output="$(MOCK_MISE_FAIL=upgrade mise_run update --map "$mise_map" 2>&1)"; then fail 'Mise upgrade failure was ignored.'; fi
+contains 'mise upgrade failed' "$output"
+if output="$(MOCK_MISE_BAD_JSON=true mise_run install --map "$mise_map" "$mise_brewfile" 2>&1)"; then fail 'Bad mise inventory was accepted.'; fi
+contains 'Could not inspect global mise tool' "$output"
+printf '%s\n' 'brew "absent-agent"' >"$mise_brewfile"
+if output="$(MOCK_MISE_FAIL=use mise_run install --map "$mise_map" "$mise_brewfile" 2>&1)"; then fail 'Mise install failure was ignored.'; fi
+contains 'mise install failed' "$output"
+: >"$mise_log"
+output="$(MISE_SHELL=fish mise_run install --map "$mise_map" "$mise_brewfile")"
+contains 'use --global --fuzzy absent-agent@latest' "$(cat "$mise_log")"
+not_contains 'To expose them' "$output"
+: >"$mise_log"
+: >"$sudo_log"
+output="$(mise_run update --dry-run --map "$mise_map")"
+contains 'Would upgrade mapped globally configured mise tools' "$output"
+[ ! -s "$mise_log" ] || fail 'Mise dry-run invoked mise.'
+[ ! -s "$sudo_log" ] || fail 'Mise dry-run invoked sudo.'
+
+# A missing mise prerequisite must not trigger package reconciliation.
+bootstrap_bin="$tmp_dir/bootstrap-macports/bin"
+mkdir -p "$bootstrap_bin"
+cat >"$bootstrap_bin/port" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+version|-q) exit 0 ;;
+*) printf '%s\n' "$*" >>"${MOCK_PREREQUISITE_PORT_LOG:?}"; exit 2 ;;
+esac
+EOF
+chmod +x "$bootstrap_bin/port"
+prerequisite_run() {
+	MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" MOCK_PREREQUISITE_PORT_LOG="$tmp_dir/prerequisite-port.log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$bootstrap_bin/port" BREW_PORT_SUDO_BIN="$mock_sudo" BREW_PORT_MISE_BIN="$bootstrap_bin/mise" "$utility" "$@"
+}
+: >"$sudo_log"
+: >"$tmp_dir/prerequisite-port.log"
+: >"$mise_log"
+printf '%s\n' 'brew "agent"' 'brew "ordinary-port"' >"$mise_brewfile"
+for command in install update; do
+	arguments=(--map "$mise_map")
+	[ "$command" != install ] || arguments+=("$mise_brewfile")
+	if output="$(prerequisite_run "$command" "${arguments[@]}" 2>&1)"; then fail 'Missing mise prerequisite was ignored.'; fi
+	contains 'sudo port install mise' "$output"
+	contains 'curl -fsSL https://mise.run | sh' "$output"
+	contains 'BREW_PORT_MISE_BIN' "$output"
+	contains 'retry the original command' "$output"
+	[ ! -s "$tmp_dir/prerequisite-port.log" ] || fail 'Missing mise allowed package reconciliation.'
+	[ ! -s "$sudo_log" ] || fail 'Missing mise requested sudo.'
+	output="$(prerequisite_run "$command" --dry-run "${arguments[@]}")"
+	contains 'mise is required' "$output"
+	contains 'Would' "$output"
+done
+[ ! -e "$bootstrap_bin/mise" ] || fail 'Missing mise was bootstrapped.'
+[ ! -s "$mise_log" ] || fail 'Missing mise dry-run invoked mise.'
+[ ! -s "$sudo_log" ] || fail 'Missing mise dry-run used sudo.'
+printf '%s\n' 'brew "ordinary-port"' >"$mise_brewfile"
+output="$(prerequisite_run install --dry-run --map "$mise_map" "$mise_brewfile")"
+not_contains 'mise is required' "$output"
+output="$(prerequisite_run update --dry-run)"
+not_contains 'mise is required' "$output"
+[ ! -s "$tmp_dir/prerequisite-port.log" ] || fail 'Prerequisite dry-run changed packages.'
+# Simulate the user installing mise and retrying.
+cp "$mock_mise" "$bootstrap_bin/mise"
+printf '%s\n' 'brew "agent"' >"$mise_brewfile"
+output="$(prerequisite_run install --map "$mise_map" "$mise_brewfile")"
+contains 'mise: 1' "$output"
+# Exercise discovery beside port without an override or shell activation.
+output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$bootstrap_bin/port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" install --map "$mise_map" "$mise_brewfile")"
+contains 'mise: 1' "$output"
+printf '%s\n' 'brew "mas"' 'mas "Test App", id: 12345' >"$mise_brewfile"
+: >"$mas_installed"
+: >"$mise_log"
+output="$(MAS_LOG="$mas_log" prerequisite_run install --map "$mise_map" "$mise_brewfile")"
+contains 'exec mas -- mas' "$(cat "$mise_log")"
+contains '12345' "$(cat "$mas_installed")"
+
 shellcheck -s bash -x -P "$repo_dir/bin" "$utility" "$repo_dir"/maps/fallbacks/*.sh "$repo_dir/tests/integration.sh"
 git diff --check
 printf '%s\n' 'brew-port checks passed.'

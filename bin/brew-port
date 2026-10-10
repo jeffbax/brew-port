@@ -18,6 +18,7 @@ source "$BP_BIN_DIR/lib/brew-port/common.bash"
 source "$BP_BIN_DIR/lib/brew-port/maps.bash"
 source "$BP_BIN_DIR/lib/brew-port/reporting.bash"
 source "$BP_BIN_DIR/lib/brew-port/macports.bash"
+source "$BP_BIN_DIR/lib/brew-port/mise.bash"
 source "$BP_BIN_DIR/lib/brew-port/fallbacks.bash"
 
 BP_VERSION=0.1.0-rc.1
@@ -52,16 +53,16 @@ usage_command() {
 		cat <<'EOF'
 Usage: brew-port install [--dry-run] [--map FILE ...] BREWFILE...
 
-Translate Brewfile declarations to MacPorts actions. --dry-run performs no writes,
-downloads, package installs, or sudo calls.
+Translate Brewfile declarations to MacPorts and mapped mise actions. --dry-run
+performs no writes, downloads, package installs, or sudo calls.
 EOF
 		;;
 	update)
 		cat <<'EOF'
 Usage: brew-port update [--dry-run] [--map FILE ...]
 
-Selfupdate and upgrade MacPorts, then refresh managed fallbacks. This does not
-upgrade the brew-port CLI itself.
+Selfupdate and upgrade MacPorts, upgrade mapped global mise tools, then refresh
+managed fallbacks. This does not upgrade the brew-port CLI itself.
 EOF
 		;;
 	refresh-fallbacks)
@@ -72,7 +73,7 @@ Refresh fallbacks recorded by earlier Brewfile installations.
 EOF
 		;;
 	doctor)
-		printf '%s\n' 'Usage: brew-port doctor' '' 'Report macOS, MacPorts, jq, mapping, and fallback compatibility status.'
+		printf '%s\n' 'Usage: brew-port doctor' '' 'Report macOS, MacPorts, mise, jq, mapping, and fallback compatibility status.'
 		;;
 	version)
 		printf '%s\n' 'Usage: brew-port version | brew-port --version | brew-port -V' '' 'Print the installed brew-port version.'
@@ -205,6 +206,7 @@ update_command() {
 	parse_options update true "$@"
 	[ "${#BP_REMAINING[@]}" -eq 0 ] || bp_die 'update does not accept Brewfiles.'
 	prepare_mutating
+	if "$BP_JQ_BIN" -e 'any(.mappings[]; .action == "mise")' "$BP_EFFECTIVE_MAP" >/dev/null; then bp_ensure_mise; fi
 	bp_selfupdate
 	if "$BP_DRY_RUN"; then
 		bp_log "Would run: sudo $BP_PORT_BIN upgrade outdated"
@@ -213,6 +215,7 @@ update_command() {
 		bp_port upgrade outdated || bp_die 'MacPorts upgrade failed.'
 	fi
 	bp_refresh_fallbacks
+	bp_upgrade_mise
 	bp_report
 }
 
@@ -244,6 +247,9 @@ doctor_command() {
 	bp_log "MacPorts binary: ${BP_PORT_BIN:-not found}"
 	if [ -n "$BP_PORT_BIN" ] && [ -x "$BP_PORT_BIN" ] && "$BP_PORT_BIN" version >/dev/null 2>&1; then bp_log 'MacPorts status: usable'; else bp_log 'MacPorts status: unavailable or broken'; fi
 	bp_log "jq: ${BP_JQ_BIN:-not found}"
+	bp_find_mise
+	bp_log "mise: ${BP_MISE_BIN:-not found}"
+	if [ -n "$BP_MISE_BIN" ] && [ -x "$BP_MISE_BIN" ]; then bp_mise_shell_guidance; fi
 	bp_log 'Effective maps:'
 	local map_file
 	for map_file in "${BP_MAP_FILES[@]}"; do bp_log "  $map_file"; done

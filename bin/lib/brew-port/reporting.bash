@@ -7,6 +7,7 @@ bp_report_init() {
 	BP_PRESENT_PORTS=0
 	BP_PRESENT_CASKS=0
 	BP_PRESENT_MAS=0
+	BP_PRESENT_MISE=0
 	: >"$BP_WARNINGS"
 	: >"$BP_MANUAL"
 	: >"$BP_FAILED"
@@ -22,6 +23,7 @@ bp_present() {
 	case "${1:-}" in
 	port) BP_PRESENT_PORTS=$((BP_PRESENT_PORTS + 1)) ;;
 	cask) BP_PRESENT_CASKS=$((BP_PRESENT_CASKS + 1)) ;;
+	mise) BP_PRESENT_MISE=$((BP_PRESENT_MISE + 1)) ;;
 	mas) BP_PRESENT_MAS=$((BP_PRESENT_MAS + 1)) ;;
 	esac
 }
@@ -30,7 +32,7 @@ bp_report() {
 	local installed_count
 	installed_count="$(awk 'END { print NR + 0 }' "$BP_INSTALLED")"
 	bp_log 'Package reconciliation:'
-	bp_log "Already present: $BP_PRESENT_COUNT (MacPorts: $BP_PRESENT_PORTS, casks: $BP_PRESENT_CASKS, MAS: $BP_PRESENT_MAS)"
+	bp_log "Already present: $BP_PRESENT_COUNT (MacPorts: $BP_PRESENT_PORTS, casks: $BP_PRESENT_CASKS, MAS: $BP_PRESENT_MAS, mise: $BP_PRESENT_MISE)"
 	bp_log "Installed: $installed_count"
 	if [ -s "$BP_INSTALLED" ]; then
 		sed 's/^/  /' "$BP_INSTALLED"

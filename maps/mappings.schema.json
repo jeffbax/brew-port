@@ -21,7 +21,7 @@
       "properties": {
         "kind": { "enum": ["brew", "cask"] },
         "token": { "type": "string", "minLength": 1 },
-        "action": { "enum": ["port", "skip", "fallback", "fallback-root", "manual"] },
+        "action": { "enum": ["port", "skip", "fallback", "fallback-root", "manual", "mise"] },
         "target": { "type": "string" },
         "note": { "type": "string" },
         "detect": {
@@ -38,6 +38,13 @@
         }
       },
       "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "mise" } } },
+          "then": {
+            "required": ["target"],
+            "properties": { "target": { "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/+-]*|npm:@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$" } }
+          }
+        },
         {
           "if": { "properties": { "action": { "const": "port" } } },
           "then": {

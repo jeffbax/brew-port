@@ -19,9 +19,11 @@ bp_validate_map_file() {
       (type == "object") and
       (.kind | IN("brew", "cask")) and
       (.token | type == "string" and length > 0) and
-      (.action | IN("port", "skip", "fallback", "fallback-root", "manual")) and
+      (.action | IN("port", "skip", "fallback", "fallback-root", "manual", "mise")) and
       ((.note // "") | type == "string") and
       (if .action == "port" then (.target | type == "string" and length > 0)
+       elif .action == "mise" then
+         (.target | type == "string" and test("^([A-Za-z0-9][A-Za-z0-9._:/+-]*|npm:@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$"))
        elif .action == "skip" then ((.target // null) == null)
        elif .action == "manual" then
          (.kind == "cask" and (.target // null) == null and
