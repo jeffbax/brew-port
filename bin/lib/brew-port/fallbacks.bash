@@ -137,7 +137,30 @@ bp_declaration_is_conditional() {
 }
 
 bp_declaration_looks_like_package() {
-	[[ "$1" =~ ^[[:space:]]*(brew|cask|mas)([[:space:]]|\() ]]
+	local text="$1" code='' quote='' escaped=false character index
+	# Look for inline calls without mistaking comments or quoted text for declarations.
+	for ((index = 0; index < ${#text}; index++)); do
+		character="${text:index:1}"
+		if [ -n "$quote" ]; then
+			if "$escaped"; then
+				escaped=false
+			elif [ "$character" = "\\" ]; then
+				escaped=true
+			elif [ "$character" = "$quote" ]; then
+				quote=
+			fi
+		else
+			case "$character" in
+			"'" | '"')
+				quote="$character"
+				code+=' '
+				;;
+			'#') break ;;
+			*) code+="$character" ;;
+			esac
+		fi
+	done
+	[[ "$code" =~ (^|[^[:alnum:]_])(brew|cask|mas)([[:space:]]|\() ]]
 }
 
 bp_run_manual_cask() {
@@ -202,6 +225,9 @@ bp_plan_brewfiles() {
 		conditional_depth=0
 		while IFS= read -r line || [ -n "$line" ]; do
 			if [[ "$line" =~ ^[[:space:]]*end([[:space:]]|$) ]]; then
+				if [ "${BP_STRICT_BREWFILE_PARSING:-false}" = true ] && bp_declaration_looks_like_package "$line"; then
+					bp_unresolved 'Brewfile declaration' 'Unsupported brew, cask, or mas declaration.'
+				fi
 				[ "$conditional_depth" -gt 0 ] && conditional_depth=$((conditional_depth - 1))
 				continue
 			fi

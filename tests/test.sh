@@ -540,6 +540,18 @@ for declaration in 'if true; brew "not-installed-anywhere"; end' 'unless false; 
 	contains 'Result: blocked' "$output"
 done
 
+inline_audit_brewfile="$tmp_dir/inline-audit.Brewfile"
+for declaration in 'true && brew "missing-audit-package"' 'false || cask("missing-app")' 'true; mas "Missing App", id: 10002' '1.times { brew "missing-audit-package" }' $'1.times do\nend ; brew "missing-audit-package"'; do
+	printf '%s\n' "$declaration" >"$inline_audit_brewfile"
+	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$inline_audit_brewfile" 2>&1)"; then fail "Audit accepted an inline package declaration: $declaration"; fi
+	contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
+	contains 'Result: blocked' "$output"
+done
+printf '%s\n' '# true && brew "missing-audit-package"' 'puts "brew missing-audit-package"' 'tap "homebrew/cask" # cask "missing-app"' 'homebrew "ignored"' 'brew "git" # mas "Missing App", id: 10002' >"$inline_audit_brewfile"
+output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$inline_audit_brewfile")"
+contains 'MacPorts targets: active 1, inactive 0, unavailable 0' "$output"
+contains 'Result: coverage complete' "$output"
+
 malformed_audit_brewfile="$tmp_dir/malformed-audit.Brewfile"
 printf '%s\n' 'mas "Malformed App", id: invalid' >"$malformed_audit_brewfile"
 if output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$malformed_audit_brewfile" 2>&1)"; then fail 'Malformed audit declaration unexpectedly succeeded.'; fi
