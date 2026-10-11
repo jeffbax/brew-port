@@ -140,6 +140,7 @@ bp_declaration_looks_like_package() {
 	local text="$1" code='' quote='' opener='' depth=0 escaped=false character index
 	local percent_pattern='^%[qQwWiIrxs]?([^[:alnum:][:space:]])'
 	local percent_operand_pattern="[[:alnum:]_]$|[])}\"'][[:space:]]*$|(^|[^[:alnum:]_])[[:digit:]]+[[:space:]]*$"
+	local bare_percent_pattern='^%[^[:alnum:][:space:]]' spaced_operand_pattern='[[:alnum:]_][[:space:]]+$'
 	# Mask literal contents so their package names do not look like inline calls.
 	for ((index = 0; index < ${#text}; index++)); do
 		character="${text:index:1}"
@@ -164,6 +165,8 @@ bp_declaration_looks_like_package() {
 				code+=' '
 				;;
 			'%')
+				# Ruby needs local-variable scope to distinguish a bare literal from modulo here.
+				if [[ "${text:0:index}" =~ $spaced_operand_pattern && "${text:index}" =~ $bare_percent_pattern ]]; then return 0; fi
 				# An operand before % makes it arithmetic, even when followed by a literal delimiter.
 				# shortcut: bare %= literals are ambiguous; use a Ruby parser if they need support.
 				if [[ ! "${text:0:index}" =~ $percent_operand_pattern && "${text:index:2}" != '%=' && "${text:index}" =~ $percent_pattern ]]; then

@@ -40,6 +40,11 @@ and `mas lookup --json` batch. Missing or unavailable MacPorts targets, unmapped
 undetected casks, invalid or missing MAS apps, and unsupported declarations are
 blockers. MAS timeouts and service failures are warnings so callers can continue.
 
+Audit blocks bare percent forms after whitespace-separated identifiers, such as
+`counter %(...)` or `puts %(...)`, because they can be modulo expressions or
+literal arguments depending on Ruby's local-variable scope. Use explicit literal
+forms such as `%q(...)` or `%w[...]` for literal arguments.
+
 Audit validates package coverage rather than individual commands or `PATH` order.
 A compatible fallback is reported as a migration path, not proof that its runtime
 executable is installed.

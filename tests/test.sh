@@ -31,7 +31,7 @@ has_candidate() {
 
 (
 	source "$repo_dir/bin/lib/brew-port/fallbacks.bash"
-	for literal in 'puts %q(brew is optional)' 'managers = %w[brew cask mas]' 'puts %Q{outer {brew is optional} cask is optional}' 'puts %(brew is optional)' 'puts %q!brew is optional!' 'puts %q(brew \) cask is optional)' 'puts %i[brew cask mas]' 'puts %r<brew cask mas>'; do
+	for literal in 'puts %q(brew is optional)' 'managers = %w[brew cask mas]' 'puts %Q{outer {brew is optional} cask is optional}' 'message = %(brew is optional)' 'puts %q!brew is optional!' 'puts %q(brew \) cask is optional)' 'puts %i[brew cask mas]' 'puts %r<brew cask mas>'; do
 		if bp_declaration_looks_like_package "$literal"; then fail "Literal mistaken for a package call: $literal"; fi
 	done
 	for declaration in 'puts %q(brew is optional); brew "missing-audit-package"' 'managers = %w[brew cask mas]; cask "missing-app"' 'puts %q!brew is optional!; mas "Missing App", id: 10002' 'puts %Q{outer {brew is optional} cask is optional}; brew "missing-audit-package"' 'puts %q(brew \) cask is optional); cask "missing-app"'; do
@@ -49,6 +49,9 @@ has_candidate() {
 	done
 	bp_declaration_looks_like_package 'puts %q(unfinished' || fail 'Unclosed literal candidate was silently ignored.'
 	if bp_declaration_looks_like_package 'puts %q(brew "literal-only")'; then fail 'Package text in a closed literal was mistaken for a call.'; fi
+	for declaration in 'counter = 10; counter %(brew "missing-audit-package")' 'puts %(brew is optional)'; do
+		bp_declaration_looks_like_package "$declaration" || fail "Ambiguous bare percent expression was silently ignored: $declaration"
+	done
 )
 mock_uname="$tmp_dir/uname"
 mock_port="$tmp_dir/port"
@@ -562,7 +565,7 @@ for declaration in 'if true; brew "not-installed-anywhere"; end' 'unless false; 
 done
 
 inline_audit_brewfile="$tmp_dir/inline-audit.Brewfile"
-for declaration in 'true && brew "missing-audit-package"' 'false || cask("missing-app")' 'true; mas "Missing App", id: 10002' '1.times { brew "missing-audit-package" }' $'1.times do\nend ; brew "missing-audit-package"' 'puts %q(brew is optional); brew "missing-audit-package"' 'counter = 10; counter%=2; brew "missing-audit-package"' 'counter = 10; counter %= 2; brew "missing-audit-package"' 'counter = 10%-2; brew "missing-audit-package"' 'counter = 10; counter %-2; brew "missing-audit-package"' 'puts "a" %(brew "missing-audit-package")'; do
+for declaration in 'true && brew "missing-audit-package"' 'false || cask("missing-app")' 'true; mas "Missing App", id: 10002' '1.times { brew "missing-audit-package" }' $'1.times do\nend ; brew "missing-audit-package"' 'puts %q(brew is optional); brew "missing-audit-package"' 'counter = 10; counter%=2; brew "missing-audit-package"' 'counter = 10; counter %= 2; brew "missing-audit-package"' 'counter = 10%-2; brew "missing-audit-package"' 'counter = 10; counter %-2; brew "missing-audit-package"' 'puts "a" %(brew "missing-audit-package")' 'counter = 10; counter %(brew "missing-audit-package")' 'puts %(brew is optional)'; do
 	printf '%s\n' "$declaration" >"$inline_audit_brewfile"
 	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$inline_audit_brewfile" 2>&1)"; then fail "Audit accepted an inline package declaration: $declaration"; fi
 	contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
