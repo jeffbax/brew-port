@@ -685,19 +685,31 @@ printf '%s\n' "$*" >>"${MOCK_MISE_LOG:?}"
 case "$1" in
 ls)
   target="$4"
+  [ "${MOCK_MISE_FAIL:-}" != ls ] || { echo 'inventory unavailable' >&2; exit 1; }
+  if [ "$target" = asdf:elixir ] && [ ! -f "$MOCK_MISE_PLUGIN_MARKER" ]; then
+    echo 'mise ERROR asdf:elixir is not installed' >&2
+    exit 1
+  fi
   [ "${MOCK_MISE_BAD_JSON:-false}" != true ] || { echo broken; exit 0; }
   jq --arg tool "$target" '.[$tool] // []' "$MOCK_MISE_STATE"
+  ;;
+tool)
+  [ "${MOCK_MISE_FAIL:-}" != tool ] || exit 1
+  [ "${MOCK_MISE_BAD_JSON:-false}" != true ] || { echo broken; exit 0; }
+  jq --arg tool "$2" '{requested_versions: (if .[$tool] then [.[$tool][].requested_version] else null end)}' "$MOCK_MISE_STATE"
   ;;
 use)
   [ "${MOCK_MISE_FAIL:-}" != use ] || exit 1
   target="${4%@latest}"
   jq --arg tool "$target" '.[$tool] = [{installed:true,requested_version:"latest"}]' "$MOCK_MISE_STATE" >"$MOCK_MISE_STATE.tmp"
   mv "$MOCK_MISE_STATE.tmp" "$MOCK_MISE_STATE"
+  [ "$target" != asdf:elixir ] || touch "$MOCK_MISE_PLUGIN_MARKER"
   ;;
 install)
   [ "${MOCK_MISE_FAIL:-}" != install ] || exit 1
   jq --arg tool "$2" '.[$tool] |= map(.installed = true)' "$MOCK_MISE_STATE" >"$MOCK_MISE_STATE.tmp"
   mv "$MOCK_MISE_STATE.tmp" "$MOCK_MISE_STATE"
+  [ "$2" != asdf:elixir ] || touch "$MOCK_MISE_PLUGIN_MARKER"
   ;;
 upgrade)
   if [ "$2" = --help ]; then
@@ -708,6 +720,11 @@ upgrade)
   fi
   ;;
 exec)
+  if [ -n "${MOCK_MISE_DELAY_MARKER:-}" ]; then
+    sleep 3
+    touch "$MOCK_MISE_DELAY_MARKER"
+    exit 0
+  fi
   [ "$2 $3 $4" = 'mas -- mas' ] || exit 92
   shift 4
   exec "$MOCK_MISE_MAS" "$@"
@@ -730,6 +747,7 @@ EOF
 mise_brewfile="$tmp_dir/mise.Brewfile"
 printf '%s\n' 'brew "agent"' 'cask "agent-alias"' 'brew "missing-agent"' >"$mise_brewfile"
 export MOCK_MISE_LOG="$mise_log" MOCK_MISE_STATE="$mise_state" MOCK_MISE_MAS="$mock_mas"
+export MOCK_MISE_PLUGIN_MARKER="$tmp_dir/mise-plugin-installed"
 "$utility" map validate --map "$mise_map" >/dev/null
 output="$("$utility" map explain --map "$mise_map" brew agent)"
 contains 'mise -> agent' "$output"
@@ -776,6 +794,41 @@ output="$(mise_run update --dry-run --map "$mise_map")"
 contains 'Would upgrade mapped globally configured mise tools' "$output"
 [ ! -s "$mise_log" ] || fail 'Mise dry-run invoked mise.'
 [ ! -s "$sudo_log" ] || fail 'Mise dry-run invoked sudo.'
+
+# A missing plugin must not hide configured requests or prevent first installation.
+plugin_map="$tmp_dir/plugin-mappings.json"
+printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"elixir","action":"mise","target":"asdf:elixir"}]}' >"$plugin_map"
+printf '%s\n' 'brew "elixir"' >"$mise_brewfile"
+: >"$mise_log"
+output="$(mise_run update --map "$plugin_map")"
+not_contains 'upgrade --global' "$(cat "$mise_log")"
+not_contains 'use --global' "$(cat "$mise_log")"
+output="$(mise_run install --map "$plugin_map" "$mise_brewfile")"
+contains 'use --global --fuzzy asdf:elixir@latest' "$(cat "$mise_log")"
+[ -f "$MOCK_MISE_PLUGIN_MARKER" ] || fail 'Missing plugin was not installed.'
+rm "$MOCK_MISE_PLUGIN_MARKER"
+jq '.["asdf:elixir"] = [{installed:false,requested_version:"1.17"}]' "$mise_state" >"$mise_state.tmp"
+mv "$mise_state.tmp" "$mise_state"
+: >"$mise_log"
+output="$(mise_run install --map "$plugin_map" "$mise_brewfile")"
+contains 'install asdf:elixir' "$(cat "$mise_log")"
+not_contains 'use --global' "$(cat "$mise_log")"
+[ "$(jq -r '.["asdf:elixir"][0].requested_version' "$mise_state")" = 1.17 ] || fail 'Configured plugin version was changed.'
+rm "$MOCK_MISE_PLUGIN_MARKER"
+for failure in ls tool; do
+	if output="$(MOCK_MISE_FAIL="$failure" mise_run install --map "$plugin_map" "$mise_brewfile" 2>&1)"; then fail 'Inventory failure was ignored.'; fi
+	contains 'Could not inspect global mise tool' "$output"
+done
+if output="$(MOCK_MISE_BAD_JSON=true mise_run install --map "$plugin_map" "$mise_brewfile" 2>&1)"; then fail 'Invalid plugin metadata was accepted.'; fi
+contains 'Could not inspect global mise tool' "$output"
+
+# The timed PID must be the executable, not a shell that leaves it running.
+timeout_marker="$tmp_dir/mise-after-timeout"
+printf '%s\n' 'brew "mas"' 'mas "Test App", id: 12345' >"$mise_brewfile"
+output="$(BREW_PORT_MAS_TIMEOUT=1 MOCK_MISE_DELAY_MARKER="$timeout_marker" mise_run install --map "$mise_map" "$mise_brewfile" 2>&1)"
+contains 'timed out' "$output"
+sleep 3
+[ ! -e "$timeout_marker" ] || fail 'Mise command continued after timeout.'
 
 # A missing mise prerequisite must not trigger package reconciliation.
 bootstrap_bin="$tmp_dir/bootstrap-macports/bin"

@@ -273,7 +273,7 @@ EOF
 		bp_find_mise
 		if "$BP_DRY_RUN" || { [ -n "$BP_MISE_BIN" ] && [ -x "$BP_MISE_BIN" ]; }; then
 			# A newly installed mise client does not need parent-shell activation.
-			mas_command=(bp_mise exec "$target" -- mas)
+			mas_command=(bp_exec_mise exec "$target" -- mas)
 		fi
 	elif [ -n "$mas_bin" ]; then
 		mas_command=("$mas_bin")

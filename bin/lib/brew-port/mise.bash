@@ -8,7 +8,10 @@ bp_find_mise() {
 	fi
 }
 
-bp_mise() (
+bp_mise() (bp_exec_mise "$@")
+
+# Timed callers already run in a child; another subshell would hide its PID on Bash 3.2.
+bp_exec_mise() {
 	# Never load the invoking project's config, hooks, or version requests.
 	# Match mise's canonical paths even when macOS exposes /private/var as /var.
 	cd -P "$BP_TMP_DIR" || return 1
@@ -17,8 +20,10 @@ bp_mise() (
 	while IFS= read -r variable; do
 		case "$variable" in MISE_*_VERSION) unset "$variable" ;; esac
 	done < <(compgen -v MISE_)
-	MISE_CEILING_PATHS="$PWD" "$BP_MISE_BIN" "$@"
-)
+	export MISE_CEILING_PATHS="$PWD"
+	# Keep the timed PID on mise itself so termination cannot orphan the command.
+	exec "$BP_MISE_BIN" "$@"
+}
 
 bp_ensure_mise() {
 	bp_find_mise
@@ -32,8 +37,25 @@ bp_ensure_mise() {
 }
 
 bp_mise_state() {
-	local target="$1" result
-	result="$(bp_mise ls --global --json "$target")" || return 1
+	local target="$1" result errors="$BP_TMP_DIR/mise-inventory.err"
+	if ! result="$(bp_mise ls --global --json "$target" 2>"$errors")"; then
+		# shortcut: mise reports plugin absence as text; revisit if its diagnostic changes.
+		if ! grep -Fq -- "$target is not installed" "$errors"; then
+			cat "$errors" >&2
+			return 1
+		fi
+		# ls rejects missing plugins; metadata still exposes their configured versions.
+		result="$(bp_mise tool "$target" --json)" || return 1
+		printf '%s\n' "$result" | "$BP_JQ_BIN" -er '
+      if type != "object" or (has("requested_versions") | not) then error("invalid mise tool metadata")
+      elif .requested_versions == null then "absent"
+      elif (.requested_versions | type) != "array" then error("invalid mise tool requests")
+      elif any(.requested_versions[]; type != "string" or length == 0) then error("invalid mise tool request")
+      elif (.requested_versions | length) == 0 then "absent"
+      else "missing" end'
+		return "$?"
+	fi
+	cat "$errors" >&2
 	printf '%s\n' "$result" | "$BP_JQ_BIN" -er '
     if type != "array" then error("invalid mise inventory")
     elif any(.[]; type != "object" or (.installed | type != "boolean")) then error("invalid mise inventory entry")
