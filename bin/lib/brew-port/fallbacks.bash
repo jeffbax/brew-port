@@ -137,7 +137,7 @@ bp_declaration_is_conditional() {
 }
 
 bp_declaration_looks_like_package() {
-	local text="$1" code='' quote='' opener='' depth=0 escaped=false character index
+	local text="$1" code='' quote='' opener='' depth=0 escaped=false interpolates=false character index
 	local percent_pattern='^%[qQwWiIrxs]?([^[:alnum:][:space:]])'
 	local percent_operand_pattern="[[:alnum:]_]$|[])}\"'][[:space:]]*$|(^|[^[:alnum:]_])[[:digit:]]+[[:space:]]*$"
 	local bare_percent_pattern='^%[^[:alnum:][:space:]]' spaced_operand_pattern='[[:alnum:]_][[:space:]]+$'
@@ -149,6 +149,9 @@ bp_declaration_looks_like_package() {
 				escaped=false
 			elif [ "$character" = "\\" ]; then
 				escaped=true
+			elif "$interpolates" && [ "${text:index:2}" = '#{' ]; then
+				# Interpolation can execute declarations; audit cannot safely mask it as text.
+				return 0
 			elif [ -n "$opener" ] && [ "$character" = "$opener" ]; then
 				depth=$((depth + 1))
 			elif [ "$character" = "$quote" ]; then
@@ -162,6 +165,7 @@ bp_declaration_looks_like_package() {
 			case "$character" in
 			"'" | '"')
 				quote="$character"
+				if [ "$character" = '"' ]; then interpolates=true; else interpolates=false; fi
 				code+=' '
 				;;
 			'%')
@@ -172,6 +176,8 @@ bp_declaration_looks_like_package() {
 				if [[ ! "${text:0:index}" =~ $percent_operand_pattern && "${text:index:2}" != '%=' && "${text:index}" =~ $percent_pattern ]]; then
 					opener="${BASH_REMATCH[1]}"
 					quote="$opener"
+					interpolates=true
+					case "${text:index:2}" in %q | %w | %i | %s) interpolates=false ;; esac
 					case "$opener" in
 					'(') quote=')' ;;
 					'[') quote=']' ;;

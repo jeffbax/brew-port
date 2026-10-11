@@ -52,6 +52,12 @@ has_candidate() {
 	for declaration in 'counter = 10; counter %(brew "missing-audit-package")' 'puts %(brew is optional)'; do
 		bp_declaration_looks_like_package "$declaration" || fail "Ambiguous bare percent expression was silently ignored: $declaration"
 	done
+	for declaration in "puts \"#{brew 'missing-audit-package'}\"" 'puts %Q(#{brew "missing-audit-package"})'; do
+		bp_declaration_looks_like_package "$declaration" || fail "Executable interpolation was silently ignored: $declaration"
+	done
+	for literal in "puts '#{brew \"literal-only\"}'" 'puts %q(#{brew "literal-only"})' 'puts "\#{brew literal-only}"' 'puts %Q(\#{brew literal-only})'; do
+		if bp_declaration_looks_like_package "$literal"; then fail "Literal interpolation text was mistaken for executable code: $literal"; fi
+	done
 )
 mock_uname="$tmp_dir/uname"
 mock_port="$tmp_dir/port"
@@ -561,6 +567,14 @@ for declaration in 'if true; brew "not-installed-anywhere"; end' 'unless false; 
 	printf '%s\n' "$declaration" >"$inline_conditional_brewfile"
 	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$inline_conditional_brewfile" 2>&1)"; then fail 'Audit accepted an inline conditional declaration.'; fi
 	contains 'Brewfile declaration: Conditional Brewfile declaration is unsupported.' "$output"
+	contains 'Result: blocked' "$output"
+done
+
+interpolated_audit_brewfile="$tmp_dir/interpolated-audit.Brewfile"
+for declaration in "puts \"#{brew 'missing-audit-package'}\"" 'puts %Q(#{brew "missing-audit-package"})'; do
+	printf '%s\n' "$declaration" >"$interpolated_audit_brewfile"
+	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$interpolated_audit_brewfile" 2>&1)"; then fail 'Audit accepted executable string interpolation.'; fi
+	contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
 	contains 'Result: blocked' "$output"
 done
 

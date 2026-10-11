@@ -44,6 +44,9 @@ Audit blocks bare percent forms after whitespace-separated identifiers, such as
 `counter %(...)` or `puts %(...)`, because they can be modulo expressions or
 literal arguments depending on Ruby's local-variable scope. Use explicit literal
 forms such as `%q(...)` or `%w[...]` for literal arguments.
+Executable `#{...}` interpolation in double-quoted strings and interpolating
+percent literals is also a blocker. Escaped interpolation and non-interpolating
+literal forms remain literal text.
 
 Audit validates package coverage rather than individual commands or `PATH` order.
 A compatible fallback is reported as a migration path, not proof that its runtime
