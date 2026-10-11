@@ -137,8 +137,10 @@ bp_declaration_is_conditional() {
 }
 
 bp_declaration_looks_like_package() {
-	local text="$1" code='' quote='' escaped=false character index
-	# Look for inline calls without mistaking comments or quoted text for declarations.
+	local text="$1" code='' quote='' opener='' depth=0 escaped=false character index
+	local percent_pattern='^%[qQwWiIrxs]?([^[:alnum:][:space:]])'
+	local percent_operand_pattern="[[:alnum:]_]$|[])}\"'][[:space:]]*$|(^|[^[:alnum:]_])[[:digit:]]+[[:space:]]*$"
+	# Mask literal contents so their package names do not look like inline calls.
 	for ((index = 0; index < ${#text}; index++)); do
 		character="${text:index:1}"
 		if [ -n "$quote" ]; then
@@ -146,8 +148,14 @@ bp_declaration_looks_like_package() {
 				escaped=false
 			elif [ "$character" = "\\" ]; then
 				escaped=true
+			elif [ -n "$opener" ] && [ "$character" = "$opener" ]; then
+				depth=$((depth + 1))
 			elif [ "$character" = "$quote" ]; then
-				quote=
+				if [ "$depth" -gt 0 ]; then depth=$((depth - 1)); fi
+				if [ "$depth" -eq 0 ]; then
+					quote=
+					opener=
+				fi
 			fi
 		else
 			case "$character" in
@@ -155,11 +163,32 @@ bp_declaration_looks_like_package() {
 				quote="$character"
 				code+=' '
 				;;
+			'%')
+				# An operand before % makes it arithmetic, even when followed by a literal delimiter.
+				# shortcut: bare %= literals are ambiguous; use a Ruby parser if they need support.
+				if [[ ! "${text:0:index}" =~ $percent_operand_pattern && "${text:index:2}" != '%=' && "${text:index}" =~ $percent_pattern ]]; then
+					opener="${BASH_REMATCH[1]}"
+					quote="$opener"
+					case "$opener" in
+					'(') quote=')' ;;
+					'[') quote=']' ;;
+					'{') quote='}' ;;
+					'<') quote='>' ;;
+					esac
+					if [ "$opener" != "$quote" ]; then depth=1; else opener=; fi
+					index=$((index + ${#BASH_REMATCH[0]} - 1))
+					code+=' '
+				else
+					code+="$character"
+				fi
+				;;
 			'#') break ;;
 			*) code+="$character" ;;
 			esac
 		fi
 	done
+	# An unclosed literal candidate may be modulo arithmetic; audit must block uncertain parsing.
+	[ -z "$quote" ] || return 0
 	[[ "$code" =~ (^|[^[:alnum:]_])(brew|cask|mas)([[:space:]]|\() ]]
 }
 

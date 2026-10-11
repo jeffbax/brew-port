@@ -29,6 +29,27 @@ has_candidate() {
 	return 1
 }
 
+(
+	source "$repo_dir/bin/lib/brew-port/fallbacks.bash"
+	for literal in 'puts %q(brew is optional)' 'managers = %w[brew cask mas]' 'puts %Q{outer {brew is optional} cask is optional}' 'puts %(brew is optional)' 'puts %q!brew is optional!' 'puts %q(brew \) cask is optional)' 'puts %i[brew cask mas]' 'puts %r<brew cask mas>'; do
+		if bp_declaration_looks_like_package "$literal"; then fail "Literal mistaken for a package call: $literal"; fi
+	done
+	for declaration in 'puts %q(brew is optional); brew "missing-audit-package"' 'managers = %w[brew cask mas]; cask "missing-app"' 'puts %q!brew is optional!; mas "Missing App", id: 10002' 'puts %Q{outer {brew is optional} cask is optional}; brew "missing-audit-package"' 'puts %q(brew \) cask is optional); cask "missing-app"'; do
+		bp_declaration_looks_like_package "$declaration" || fail "Package call after literal was missed: $declaration"
+	done
+	for declaration in 'counter = 10; counter%=2; brew "missing-audit-package"' 'counter = 10; counter %= 2; brew "missing-audit-package"'; do
+		bp_declaration_looks_like_package "$declaration" || fail "Package call after modulo assignment was missed: $declaration"
+	done
+	for expression in '10%-2' '10%+2' '10 % -2' '10 %-2' 'counter%-2' '(10)%-2' 'values[0]%-2'; do
+		bp_declaration_looks_like_package "counter = $expression; brew \"missing-audit-package\"" || fail "Package call after modulo arithmetic was missed: $expression"
+	done
+	bp_declaration_looks_like_package 'counter = 10%(brew "missing-audit-package")' || fail 'Package call inside a modulo operand was missed.'
+	for declaration in 'counter = 10; counter %-2; brew "missing-audit-package"' 'puts "a" %(brew "missing-audit-package")' "puts 'a' %(brew \"missing-audit-package\")"; do
+		bp_declaration_looks_like_package "$declaration" || fail "Package call after a modulo operand was missed: $declaration"
+	done
+	bp_declaration_looks_like_package 'puts %q(unfinished' || fail 'Unclosed literal candidate was silently ignored.'
+	if bp_declaration_looks_like_package 'puts %q(brew "literal-only")'; then fail 'Package text in a closed literal was mistaken for a call.'; fi
+)
 mock_uname="$tmp_dir/uname"
 mock_port="$tmp_dir/port"
 mock_sudo="$tmp_dir/sudo"
@@ -541,13 +562,13 @@ for declaration in 'if true; brew "not-installed-anywhere"; end' 'unless false; 
 done
 
 inline_audit_brewfile="$tmp_dir/inline-audit.Brewfile"
-for declaration in 'true && brew "missing-audit-package"' 'false || cask("missing-app")' 'true; mas "Missing App", id: 10002' '1.times { brew "missing-audit-package" }' $'1.times do\nend ; brew "missing-audit-package"'; do
+for declaration in 'true && brew "missing-audit-package"' 'false || cask("missing-app")' 'true; mas "Missing App", id: 10002' '1.times { brew "missing-audit-package" }' $'1.times do\nend ; brew "missing-audit-package"' 'puts %q(brew is optional); brew "missing-audit-package"' 'counter = 10; counter%=2; brew "missing-audit-package"' 'counter = 10; counter %= 2; brew "missing-audit-package"' 'counter = 10%-2; brew "missing-audit-package"' 'counter = 10; counter %-2; brew "missing-audit-package"' 'puts "a" %(brew "missing-audit-package")'; do
 	printf '%s\n' "$declaration" >"$inline_audit_brewfile"
 	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$inline_audit_brewfile" 2>&1)"; then fail "Audit accepted an inline package declaration: $declaration"; fi
 	contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
 	contains 'Result: blocked' "$output"
 done
-printf '%s\n' '# true && brew "missing-audit-package"' 'puts "brew missing-audit-package"' 'tap "homebrew/cask" # cask "missing-app"' 'homebrew "ignored"' 'brew "git" # mas "Missing App", id: 10002' >"$inline_audit_brewfile"
+printf '%s\n' '# true && brew "missing-audit-package"' 'puts "brew missing-audit-package"' 'puts %q(brew is optional)' 'managers = %w[brew cask mas]' 'tap "homebrew/cask" # cask "missing-app"' 'homebrew "ignored"' 'brew "git" # mas "Missing App", id: 10002' >"$inline_audit_brewfile"
 output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$inline_audit_brewfile")"
 contains 'MacPorts targets: active 1, inactive 0, unavailable 0' "$output"
 contains 'Result: coverage complete' "$output"
