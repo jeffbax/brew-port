@@ -40,6 +40,13 @@ and `mas lookup --json` batch. Missing or unavailable MacPorts targets, unmapped
 undetected casks, invalid or missing MAS apps, and unsupported declarations are
 blockers. MAS timeouts and service failures are warnings so callers can continue.
 
+Only `brew`, `cask`, and `mas` package declarations are audited. Other Brewfile
+package types (`vscode`, `go`, `cargo`, `npm`, `uv`, `krew`, `flatpak`, and `winget`)
+are blockers requiring manual review.
+Ruby evaluation and imports (`eval`, `instance_eval`, `class_eval`, `module_eval`,
+`load`, `require`, and `require_relative`) also block audit because they can hide
+package declarations. Pass package files explicitly as Brewfile arguments.
+
 Audit blocks bare percent forms after whitespace-separated identifiers, such as
 `counter %(...)` or `puts %(...)`, because they can be modulo expressions or
 literal arguments depending on Ruby's local-variable scope. Use explicit literal

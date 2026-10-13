@@ -200,7 +200,10 @@ bp_declaration_looks_like_package() {
 	done
 	# An unclosed literal candidate may be modulo arithmetic; audit must block uncertain parsing.
 	[ -z "$quote" ] || return 0
-	[[ "$code" =~ (^|[^[:alnum:]_])(brew|cask|mas)([[:space:]]|\() ]]
+	# Other Brewfile package managers still need review before Homebrew removal.
+	[[ "$code" =~ (^|[^[:alnum:]_])(brew|cask|mas|vscode|go|cargo|npm|uv|krew|flatpak|winget)([[:space:]]|\() ]] && return 0
+	# Evaluated or imported Ruby can declare packages outside the supplied Brewfiles.
+	[[ "$code" =~ (^|[^[:alnum:]_])(eval|instance_eval|class_eval|module_eval|load|require|require_relative)([[:space:]]|\() ]]
 }
 
 bp_run_manual_cask() {
@@ -266,7 +269,7 @@ bp_plan_brewfiles() {
 		while IFS= read -r line || [ -n "$line" ]; do
 			if [[ "$line" =~ ^[[:space:]]*end([[:space:]]|$) ]]; then
 				if [ "${BP_STRICT_BREWFILE_PARSING:-false}" = true ] && bp_declaration_looks_like_package "$line"; then
-					bp_unresolved 'Brewfile declaration' 'Unsupported brew, cask, or mas declaration.'
+					bp_unresolved 'Brewfile declaration' 'Unsupported Brewfile declaration.'
 				fi
 				[ "$conditional_depth" -gt 0 ] && conditional_depth=$((conditional_depth - 1))
 				continue
@@ -281,7 +284,7 @@ bp_plan_brewfiles() {
 			fi
 			if ! bp_parse_brewfile_declaration "$line"; then
 				if [ "${BP_STRICT_BREWFILE_PARSING:-false}" = true ] && bp_declaration_looks_like_package "$line"; then
-					bp_unresolved 'Brewfile declaration' 'Unsupported brew, cask, or mas declaration.'
+					bp_unresolved 'Brewfile declaration' 'Unsupported Brewfile declaration.'
 				fi
 				continue
 			fi
@@ -289,7 +292,7 @@ bp_plan_brewfiles() {
 				# A recognized declaration can still execute packages through its string arguments.
 				bp_declaration_looks_like_package "$line" || true
 				if "$BP_DECLARATION_HAS_INTERPOLATION"; then
-					bp_unresolved 'Brewfile declaration' 'Unsupported brew, cask, or mas declaration.'
+					bp_unresolved 'Brewfile declaration' 'Unsupported Brewfile declaration.'
 					continue
 				fi
 			fi

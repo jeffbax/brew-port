@@ -579,7 +579,7 @@ contains 'Result: coverage complete' "$output"
 for declaration in "puts \"#{brew 'missing-audit-package'}\"" 'puts %Q(#{brew "missing-audit-package"})' "mas \"#{brew 'missing-audit-package'}\", id: 10001"; do
 	printf '%s\n' "$declaration" >"$interpolated_audit_brewfile"
 	if output="$(PATH="$tmp_dir:$PATH" MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$interpolated_audit_brewfile" 2>&1)"; then fail 'Audit accepted executable string interpolation.'; fi
-	contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
+	contains 'Brewfile declaration: Unsupported Brewfile declaration.' "$output"
 	contains 'Result: blocked' "$output"
 done
 
@@ -587,7 +587,7 @@ inline_audit_brewfile="$tmp_dir/inline-audit.Brewfile"
 for declaration in 'true && brew "missing-audit-package"' 'false || cask("missing-app")' 'true; mas "Missing App", id: 10002' '1.times { brew "missing-audit-package" }' $'1.times do\nend ; brew "missing-audit-package"' 'puts %q(brew is optional); brew "missing-audit-package"' 'counter = 10; counter%=2; brew "missing-audit-package"' 'counter = 10; counter %= 2; brew "missing-audit-package"' 'counter = 10%-2; brew "missing-audit-package"' 'counter = 10; counter %-2; brew "missing-audit-package"' 'puts "a" %(brew "missing-audit-package")' 'counter = 10; counter %(brew "missing-audit-package")' 'puts %(brew is optional)'; do
 	printf '%s\n' "$declaration" >"$inline_audit_brewfile"
 	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$inline_audit_brewfile" 2>&1)"; then fail "Audit accepted an inline package declaration: $declaration"; fi
-	contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
+	contains 'Brewfile declaration: Unsupported Brewfile declaration.' "$output"
 	contains 'Result: blocked' "$output"
 done
 printf '%s\n' '# true && brew "missing-audit-package"' 'puts "brew missing-audit-package"' 'puts %q(brew is optional)' 'managers = %w[brew cask mas]' 'tap "homebrew/cask" # cask "missing-app"' 'homebrew "ignored"' 'brew "git" # mas "Missing App", id: 10002' >"$inline_audit_brewfile"
@@ -595,10 +595,29 @@ output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="
 contains 'MacPorts targets: active 1, inactive 0, unavailable 0' "$output"
 contains 'Result: coverage complete' "$output"
 
+unsupported_type_brewfile="$tmp_dir/unsupported-type.Brewfile"
+for kind in vscode go cargo npm uv krew flatpak winget; do
+	printf '%s "%s"\n' "$kind" unchecked-package >"$unsupported_type_brewfile"
+	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$unsupported_type_brewfile" 2>&1)"; then fail "Audit accepted an unchecked package type: $kind"; fi
+	contains 'Brewfile declaration: Unsupported Brewfile declaration.' "$output"
+	contains 'Result: blocked' "$output"
+done
+
+imported_audit_brewfile="$tmp_dir/imported-audit.Brewfile"
+for evaluator in eval instance_eval class_eval module_eval load require require_relative; do
+	printf '%s(File.read("core.rb"))\n' "$evaluator" >"$imported_audit_brewfile"
+	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$imported_audit_brewfile" 2>&1)"; then fail "Audit accepted unchecked Ruby evaluation: $evaluator"; fi
+	contains 'Brewfile declaration: Unsupported Brewfile declaration.' "$output"
+	contains 'Result: blocked' "$output"
+done
+printf '%s\n' '# eval(File.read("core.rb"))' 'puts "require core.rb"' 'puts %q(load core.rb)' 'brew "git"' >"$imported_audit_brewfile"
+output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$imported_audit_brewfile")"
+contains 'Result: coverage complete' "$output"
+
 malformed_audit_brewfile="$tmp_dir/malformed-audit.Brewfile"
 printf '%s\n' 'mas "Malformed App", id: invalid' >"$malformed_audit_brewfile"
 if output="$(MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$malformed_audit_brewfile" 2>&1)"; then fail 'Malformed audit declaration unexpectedly succeeded.'; fi
-contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
+contains 'Brewfile declaration: Unsupported Brewfile declaration.' "$output"
 contains 'Result: blocked' "$output"
 : >"$active_ports"
 : >"$all_ports"
