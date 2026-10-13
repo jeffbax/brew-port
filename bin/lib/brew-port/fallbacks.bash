@@ -141,6 +141,7 @@ bp_declaration_looks_like_package() {
 	local percent_pattern='^%[qQwWiIrxs]?([^[:alnum:][:space:]])'
 	local percent_operand_pattern="[[:alnum:]_]$|[])}\"'][[:space:]]*$|(^|[^[:alnum:]_])[[:digit:]]+[[:space:]]*$"
 	local bare_percent_pattern='^%[^[:alnum:][:space:]]' spaced_operand_pattern='[[:alnum:]_][[:space:]]+$'
+	BP_DECLARATION_HAS_INTERPOLATION=false
 	# Mask literal contents so their package names do not look like inline calls.
 	for ((index = 0; index < ${#text}; index++)); do
 		character="${text:index:1}"
@@ -151,6 +152,7 @@ bp_declaration_looks_like_package() {
 				escaped=true
 			elif "$interpolates" && [ "${text:index:2}" = '#{' ]; then
 				# Interpolation can execute declarations; audit cannot safely mask it as text.
+				BP_DECLARATION_HAS_INTERPOLATION=true
 				return 0
 			elif [ -n "$opener" ] && [ "$character" = "$opener" ]; then
 				depth=$((depth + 1))
@@ -282,6 +284,14 @@ bp_plan_brewfiles() {
 					bp_unresolved 'Brewfile declaration' 'Unsupported brew, cask, or mas declaration.'
 				fi
 				continue
+			fi
+			if [ "${BP_STRICT_BREWFILE_PARSING:-false}" = true ]; then
+				# A recognized declaration can still execute packages through its string arguments.
+				bp_declaration_looks_like_package "$line" || true
+				if "$BP_DECLARATION_HAS_INTERPOLATION"; then
+					bp_unresolved 'Brewfile declaration' 'Unsupported brew, cask, or mas declaration.'
+					continue
+				fi
 			fi
 			if [ "$conditional_depth" -gt 0 ] || bp_declaration_is_conditional "$BP_DECLARATION_TRAILING"; then
 				bp_unresolved "$BP_DECLARATION_KIND $BP_DECLARATION_TOKEN" 'Conditional Brewfile declaration is unsupported.'

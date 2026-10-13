@@ -571,9 +571,14 @@ for declaration in 'if true; brew "not-installed-anywhere"; end' 'unless false; 
 done
 
 interpolated_audit_brewfile="$tmp_dir/interpolated-audit.Brewfile"
-for declaration in "puts \"#{brew 'missing-audit-package'}\"" 'puts %Q(#{brew "missing-audit-package"})'; do
+printf '%s\n' 10001 >"$mas_installed"
+printf '%s\n' 'mas "Installed App", id: 10001' >"$interpolated_audit_brewfile"
+output="$(PATH="$tmp_dir:$PATH" MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$interpolated_audit_brewfile")"
+contains 'Mac App Store apps: installed 1, missing 0, invalid 0, unknown 0' "$output"
+contains 'Result: coverage complete' "$output"
+for declaration in "puts \"#{brew 'missing-audit-package'}\"" 'puts %Q(#{brew "missing-audit-package"})' "mas \"#{brew 'missing-audit-package'}\", id: 10001"; do
 	printf '%s\n' "$declaration" >"$interpolated_audit_brewfile"
-	if output="$(MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$interpolated_audit_brewfile" 2>&1)"; then fail 'Audit accepted executable string interpolation.'; fi
+	if output="$(PATH="$tmp_dir:$PATH" MOCK_ARCH=arm64 BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" "$utility" audit "$interpolated_audit_brewfile" 2>&1)"; then fail 'Audit accepted executable string interpolation.'; fi
 	contains 'Brewfile declaration: Unsupported brew, cask, or mas declaration.' "$output"
 	contains 'Result: blocked' "$output"
 done
