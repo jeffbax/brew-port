@@ -691,12 +691,12 @@ ls)
     exit 1
   fi
   [ "${MOCK_MISE_BAD_JSON:-false}" != true ] || { echo broken; exit 0; }
-  jq --arg tool "$target" '.[$tool] // []' "$MOCK_MISE_STATE"
+  jq --arg tool "$target" '.[$tool] // [] | map(select(.unresolved != true) | .version = (.version // .requested_version)) | unique_by(.version)' "$MOCK_MISE_STATE"
   ;;
 tool)
   [ "${MOCK_MISE_FAIL:-}" != tool ] || exit 1
   [ "${MOCK_MISE_BAD_JSON:-false}" != true ] || { echo broken; exit 0; }
-  jq --arg tool "$2" '{requested_versions: (if .[$tool] then [.[$tool][].requested_version] else null end)}' "$MOCK_MISE_STATE"
+  jq --arg tool "$2" '{requested_versions: (if .[$tool] then [.[$tool][].requested_version] else null end), active_versions: (if .[$tool] then [.[$tool][] | select(.unresolved != true) | .version // .requested_version] else null end)}' "$MOCK_MISE_STATE"
   ;;
 use)
   [ "${MOCK_MISE_FAIL:-}" != use ] || exit 1
@@ -795,6 +795,39 @@ contains 'Would upgrade mapped globally configured mise tools' "$output"
 [ ! -s "$mise_log" ] || fail 'Mise dry-run invoked mise.'
 [ ! -s "$sudo_log" ] || fail 'Mise dry-run invoked sudo.'
 
+# Successful inventory can omit configured requests that failed to resolve.
+resolution_map="$tmp_dir/resolution-mappings.json"
+printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"node","action":"mise","target":"node"}]}' >"$resolution_map"
+printf '%s\n' 'brew "node"' >"$mise_brewfile"
+# Metadata retains both resolutions even when inventory deduplicates the version.
+for installed in true false; do
+	jq --argjson installed "$installed" '.node = [{installed:$installed,requested_version:"26",version:"26.7.0"},{installed:$installed,requested_version:"26.7.0",version:"26.7.0"}]' "$mise_state" >"$mise_state.tmp"
+	mv "$mise_state.tmp" "$mise_state"
+	: >"$mise_log"
+	output="$(mise_run install --map "$resolution_map" "$mise_brewfile")"
+	if "$installed"; then contains 'mise: 1' "$output"; else contains 'install node' "$(cat "$mise_log")"; fi
+	not_contains 'use --global' "$(cat "$mise_log")"
+	[ "$(jq -c '[.node[].requested_version]' "$mise_state")" = '["26","26.7.0"]' ] || fail 'Overlapping constraints were changed.'
+done
+: >"$mise_log"
+output="$(mise_run update --map "$resolution_map")"
+contains 'upgrade --global node' "$(cat "$mise_log")"
+for partial in false true; do
+	jq --argjson partial "$partial" '.node = ([{installed:false,requested_version:"prefix:999",unresolved:true}] + if $partial then [{installed:true,requested_version:"20"}] else [] end)' "$mise_state" >"$mise_state.tmp"
+	mv "$mise_state.tmp" "$mise_state"
+	for command in install update; do
+		arguments=(--map "$resolution_map")
+		[ "$command" != install ] || arguments+=("$mise_brewfile")
+		: >"$mise_log"
+		if output="$(mise_run "$command" "${arguments[@]}" 2>&1)"; then fail 'Unresolved configured request was ignored.'; fi
+		contains 'Could not inspect global mise tool' "$output"
+		not_contains 'use --global' "$(cat "$mise_log")"
+		not_contains 'install node' "$(cat "$mise_log")"
+		not_contains 'upgrade --global' "$(cat "$mise_log")"
+		[ "$(jq -r '.node[0].requested_version' "$mise_state")" = prefix:999 ] || fail 'Unresolved constraint was replaced.'
+	done
+done
+
 # A missing plugin must not hide configured requests or prevent first installation.
 plugin_map="$tmp_dir/plugin-mappings.json"
 printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"elixir","action":"mise","target":"asdf:elixir"}]}' >"$plugin_map"
@@ -865,6 +898,15 @@ done
 [ ! -e "$bootstrap_bin/mise" ] || fail 'Missing mise was bootstrapped.'
 [ ! -s "$mise_log" ] || fail 'Missing mise dry-run invoked mise.'
 [ ! -s "$sudo_log" ] || fail 'Missing mise dry-run used sudo.'
+printf '%s\n' 'brew "ordinary-port"' 'mas "Test App", id: 12345' >"$mise_brewfile"
+if output="$(prerequisite_run install --map "$mise_map" "$mise_brewfile" 2>&1)"; then fail 'Implicit MAS mise prerequisite was ignored.'; fi
+contains 'mise is required' "$output"
+contains 'retry the original command' "$output"
+[ ! -s "$tmp_dir/prerequisite-port.log" ] || fail 'Implicit MAS prerequisite allowed package reconciliation.'
+[ ! -s "$sudo_log" ] || fail 'Implicit MAS prerequisite requested sudo.'
+output="$(prerequisite_run install --dry-run --map "$mise_map" "$mise_brewfile")"
+contains 'mise is required' "$output"
+contains 'Would reconcile Mac App Store apps' "$output"
 printf '%s\n' 'brew "ordinary-port"' >"$mise_brewfile"
 output="$(prerequisite_run install --dry-run --map "$mise_map" "$mise_brewfile")"
 not_contains 'mise is required' "$output"

@@ -356,11 +356,16 @@ EOF
 }
 
 bp_reconcile_brewfiles() {
-	local kind token detect target
+	local kind token detect target row
 	bp_plan_brewfiles "$@"
 	bp_prepare_execution_plan
 	# Check before reconciling other packages so installing mise and retrying is enough.
-	if [ -s "$BP_MISE_PLAN" ]; then bp_ensure_mise; fi
+	if [ -s "$BP_MISE_PLAN" ]; then
+		bp_ensure_mise
+	elif [ -s "$BP_MAS_PLAN" ]; then
+		row="$(bp_lookup_mapping brew mas || true)"
+		case "$row" in mise$'\034'*) bp_ensure_mise ;; esac
+	fi
 	if [ -s "$BP_PORT_PLAN" ]; then
 		bp_snapshot_active_ports
 		bp_install_port_plan "$BP_PORT_PLAN"

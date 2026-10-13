@@ -37,29 +37,39 @@ bp_ensure_mise() {
 }
 
 bp_mise_state() {
-	local target="$1" result errors="$BP_TMP_DIR/mise-inventory.err"
+	local target="$1" metadata result requests errors="$BP_TMP_DIR/mise-inventory.err"
+	# Inventory can omit unresolved versions, so configuration determines absence.
+	metadata="$(bp_mise tool "$target" --json)" || return 1
+	requests="$(printf '%s\n' "$metadata" | "$BP_JQ_BIN" -ce '
+    if type != "object" or (has("requested_versions") | not) then error("invalid mise tool metadata")
+    elif .requested_versions == null then []
+    elif (.requested_versions | type) != "array" then error("invalid mise tool requests")
+    elif any(.requested_versions[]; type != "string" or length == 0) then error("invalid mise tool request")
+    else .requested_versions end')" || return 1
+	if [ "$requests" = '[]' ]; then
+		printf '%s\n' absent
+		return 0
+	fi
 	if ! result="$(bp_mise ls --global --json "$target" 2>"$errors")"; then
 		# shortcut: mise reports plugin absence as text; revisit if its diagnostic changes.
 		if ! grep -Fq -- "$target is not installed" "$errors"; then
 			cat "$errors" >&2
 			return 1
 		fi
-		# ls rejects missing plugins; metadata still exposes their configured versions.
-		result="$(bp_mise tool "$target" --json)" || return 1
-		printf '%s\n' "$result" | "$BP_JQ_BIN" -er '
-      if type != "object" or (has("requested_versions") | not) then error("invalid mise tool metadata")
-      elif .requested_versions == null then "absent"
-      elif (.requested_versions | type) != "array" then error("invalid mise tool requests")
-      elif any(.requested_versions[]; type != "string" or length == 0) then error("invalid mise tool request")
-      elif (.requested_versions | length) == 0 then "absent"
-      else "missing" end'
-		return "$?"
+		printf '%s\n' missing
+		return 0
 	fi
 	cat "$errors" >&2
-	printf '%s\n' "$result" | "$BP_JQ_BIN" -er '
+	# Several requests can resolve to one inventory entry; metadata retains each resolution.
+	# shellcheck disable=SC2016
+	printf '%s\n' "$result" | "$BP_JQ_BIN" -er --argjson metadata "$metadata" '
     if type != "array" then error("invalid mise inventory")
     elif any(.[]; type != "object" or (.installed | type != "boolean")) then error("invalid mise inventory entry")
-    elif length == 0 then "absent"
+    elif ($metadata.active_versions | type) != "array" then error("invalid mise resolutions")
+    elif any($metadata.active_versions[]; type != "string" or length == 0) then error("invalid mise resolution")
+    elif ($metadata.active_versions | length) != ($metadata.requested_versions | length) then error("mise omitted configured resolutions")
+    elif any(.[]; (.version | type) != "string" or .version == "") then error("invalid mise inventory version")
+    elif ([.[].version] as $versions | ($metadata.active_versions - $versions | length) > 0) then error("mise inventory omitted resolved versions")
     elif all(.[]; .installed == true) then "installed"
     else "missing" end'
 }
