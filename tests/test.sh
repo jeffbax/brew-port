@@ -759,6 +759,30 @@ mise_run() {
 	MOCK_ARCH=arm64 SUDO_LOG="$sudo_log" BREW_PORT_UNAME_BIN="$mock_uname" BREW_PORT_PORT_BIN="$mock_port" BREW_PORT_SUDO_BIN="$mock_sudo" BREW_PORT_MISE_BIN="$mock_mise" "$utility" "$@"
 }
 printf '%s\n' '{"agent":[{"installed":true,"requested_version":"1.2.3"}],"missing-agent":[{"installed":false,"requested_version":"2"}],"unmapped":[{"installed":true,"requested_version":"latest"}]}' >"$mise_state"
+# Discovery must preserve executables relative to the invoking directory.
+relative_mise_dir="$tmp_dir/relative mise"
+mkdir "$relative_mise_dir"
+cp "$mock_mise" "$relative_mise_dir/mise"
+for discovery in override path sibling; do
+	output="$(
+		cd "$relative_mise_dir"
+		source "$repo_dir/bin/lib/brew-port/common.bash"
+		source "$repo_dir/bin/lib/brew-port/mise.bash"
+		BP_TMP_DIR="$tmp_dir"
+		BP_PORT_BIN="$tmp_dir/no-port"
+		unset BREW_PORT_MISE_BIN
+		if [ "$discovery" = override ]; then
+			BREW_PORT_MISE_BIN=./mise
+		elif [ "$discovery" = path ]; then
+			export PATH=".:$PATH"
+		else
+			BP_PORT_BIN=./port
+		fi
+		bp_ensure_mise
+		bp_mise tool agent --json
+	)"
+	contains '1.2.3' "$output"
+done
 : >"$mise_log"
 : >"$sudo_log"
 output="$(MISE_AGENT_VERSION=999 MISE_SHELL='' SHELL=/bin/zsh mise_run install --map "$mise_map" "$mise_brewfile")"

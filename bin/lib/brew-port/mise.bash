@@ -6,6 +6,11 @@ bp_find_mise() {
 	else
 		BP_MISE_BIN="$(bp_command_path mise)"
 	fi
+	# Commands run from a temporary directory after discovery.
+	case "$BP_MISE_BIN" in
+	'' | /*) ;;
+	*) BP_MISE_BIN="$PWD/$BP_MISE_BIN" ;;
+	esac
 }
 
 bp_mise() (bp_exec_mise "$@")
