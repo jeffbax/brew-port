@@ -23,7 +23,8 @@ bp_validate_map_file() {
       ((.note // "") | type == "string") and
       (if .action == "port" then (.target | type == "string" and length > 0)
        elif .action == "mise" then
-         (.target | type == "string" and test("^([A-Za-z0-9][A-Za-z0-9._:/+-]*|npm:@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$"))
+         # End anchors also match before a trailing newline, which splits plan rows.
+         (.target | type == "string" and test("^(?!.*\\s)([A-Za-z0-9][A-Za-z0-9._:/+-]*|npm:@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$"))
        elif .action == "skip" then ((.target // null) == null)
        elif .action == "manual" then
          (.kind == "cask" and (.target // null) == null and

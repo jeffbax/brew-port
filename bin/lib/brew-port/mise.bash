@@ -25,6 +25,8 @@ bp_exec_mise() {
 	while IFS= read -r variable; do
 		case "$variable" in MISE_*_VERSION) unset "$variable" ;; esac
 	done < <(compgen -v MISE_)
+	# Explicit file overrides bypass directory isolation and redirect global writes.
+	unset MISE_CONFIG_FILE MISE_GLOBAL_CONFIG_FILE MISE_DEFAULT_CONFIG_FILENAME MISE_DEFAULT_TOOL_VERSIONS_FILENAME
 	export MISE_CEILING_PATHS="$PWD"
 	# Keep the timed PID on mise itself so termination cannot orphan the command.
 	exec "$BP_MISE_BIN" "$@"
@@ -42,7 +44,7 @@ bp_ensure_mise() {
 }
 
 bp_mise_state() {
-	local target="$1" metadata result requests errors="$BP_TMP_DIR/mise-inventory.err"
+	local target="$1" metadata result requests disabled errors="$BP_TMP_DIR/mise-inventory.err"
 	# Inventory can omit unresolved versions, so configuration determines absence.
 	metadata="$(bp_mise tool "$target" --json)" || return 1
 	requests="$(printf '%s\n' "$metadata" | "$BP_JQ_BIN" -ce '
@@ -52,6 +54,14 @@ bp_mise_state() {
     elif any(.requested_versions[]; type != "string" or length == 0) then error("invalid mise tool request")
     else .requested_versions end')" || return 1
 	if [ "$requests" = '[]' ]; then
+		# Disabled tools hide their requests; configuring latest would overwrite them.
+		disabled="$(bp_mise settings get disable_tools)" || return 1
+		# shellcheck disable=SC2016
+		printf '%s\n' "$disabled" | "$BP_JQ_BIN" -e --arg target "$target" --argjson metadata "$metadata" '
+      if type != "array" or any(.[]; type != "string") then error("invalid mise disabled tools")
+      elif ([$target, ($metadata.backend // $target | ltrimstr("core:"))] as $names |
+        any(.[]; . as $tool | $names | index($tool))) then error("mise tool is disabled")
+      else true end' >/dev/null || return 1
 		printf '%s\n' absent
 		return 0
 	fi
@@ -152,7 +162,7 @@ bp_upgrade_mise() {
 	[ "${#configured[@]}" -gt 0 ] || return 0
 	help_text="$(bp_mise upgrade --help)" || help_text=''
 	if [[ "$help_text" != *'--global'* ]]; then
-		bp_action_failed mise 'mise upgrade --global is required; update the MacPorts mise package before upgrading mapped tools.'
+		bp_action_failed mise 'mise upgrade --global is required; update mise before upgrading mapped tools.'
 		return 0
 	fi
 	bp_log "Upgrading global mise tools: ${configured[*]}"

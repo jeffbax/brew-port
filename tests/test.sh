@@ -682,7 +682,12 @@ printf '%s\n' "$*" >>"${MOCK_MISE_LOG:?}"
 [ "$PWD" -ef "${MISE_CEILING_PATHS:?}" ] || exit 90
 [ "$PWD" = "$(pwd -P)" ] || exit 94
 [ -z "${MISE_AGENT_VERSION:-}" ] || exit 93
+[ -z "${MISE_CONFIG_FILE:-}${MISE_GLOBAL_CONFIG_FILE:-}${MISE_DEFAULT_CONFIG_FILENAME:-}${MISE_DEFAULT_TOOL_VERSIONS_FILENAME:-}" ] || exit 95
 case "$1" in
+settings)
+  [ "$2 $3" = "get disable_tools" ] || exit 96
+  jq -n --arg tool "${MISE_DISABLE_TOOLS:-}" 'if $tool == "" then [] else [$tool] end'
+  ;;
 ls)
   target="$4"
   [ "${MOCK_MISE_FAIL:-}" != ls ] || { echo 'inventory unavailable' >&2; exit 1; }
@@ -696,7 +701,7 @@ ls)
 tool)
   [ "${MOCK_MISE_FAIL:-}" != tool ] || exit 1
   [ "${MOCK_MISE_BAD_JSON:-false}" != true ] || { echo broken; exit 0; }
-  jq --arg tool "$2" '{requested_versions: (if .[$tool] then [.[$tool][].requested_version] else null end), active_versions: (if .[$tool] then [.[$tool][] | select(.unresolved != true) | .version // .requested_version] else null end)}' "$MOCK_MISE_STATE"
+  jq --arg tool "${2#core:}" --arg backend "$2" --arg disabled "${MISE_DISABLE_TOOLS:-}" 'if $tool == $disabled then {requested_versions:null,active_versions:null,backend:(if ($backend | contains(":")) then $backend else "core:" + $backend end)} else {requested_versions: (if .[$tool] then [.[$tool][].requested_version] else null end), active_versions: (if .[$tool] then [.[$tool][] | select(.unresolved != true) | .version // .requested_version] else null end)} end' "$MOCK_MISE_STATE"
   ;;
 use)
   [ "${MOCK_MISE_FAIL:-}" != use ] || exit 1
@@ -751,7 +756,7 @@ export MOCK_MISE_PLUGIN_MARKER="$tmp_dir/mise-plugin-installed"
 "$utility" map validate --map "$mise_map" >/dev/null
 output="$("$utility" map explain --map "$mise_map" brew agent)"
 contains 'mise -> agent' "$output"
-for invalid_target in '' '--global' 'agent@1' 'agent tool' 'agent[postinstall=bad]'; do
+for invalid_target in '' '--global' 'agent@1' 'agent tool' 'agent[postinstall=bad]' $'agent\n'; do
 	jq --arg target "$invalid_target" '.mappings[0].target = $target' "$mise_map" >"$tmp_dir/invalid-mise.json"
 	if "$utility" map validate --map "$tmp_dir/invalid-mise.json" >/dev/null 2>&1; then fail "Accepted invalid mise target: $invalid_target"; fi
 done
@@ -785,7 +790,7 @@ for discovery in override path sibling; do
 done
 : >"$mise_log"
 : >"$sudo_log"
-output="$(MISE_AGENT_VERSION=999 MISE_SHELL='' SHELL=/bin/zsh mise_run install --map "$mise_map" "$mise_brewfile")"
+output="$(MISE_CONFIG_FILE=project.toml MISE_GLOBAL_CONFIG_FILE=project.toml MISE_DEFAULT_CONFIG_FILENAME=/project/mise.toml MISE_DEFAULT_TOOL_VERSIONS_FILENAME=/project/.tool-versions MISE_AGENT_VERSION=999 MISE_SHELL='' SHELL=/bin/zsh mise_run install --map "$mise_map" "$mise_brewfile")"
 contains 'Already present: 2' "$output"
 contains 'mise: 2' "$output"
 contains 'activate zsh' "$output"
@@ -823,6 +828,25 @@ contains 'Would upgrade mapped globally configured mise tools' "$output"
 resolution_map="$tmp_dir/resolution-mappings.json"
 printf '%s\n' '{"version":1,"mappings":[{"kind":"brew","token":"node","action":"mise","target":"node"}]}' >"$resolution_map"
 printf '%s\n' 'brew "node"' >"$mise_brewfile"
+# Disabled tools hide configured requests; inspection must not replace them.
+jq '.node = [{installed:true,requested_version:"20"}]' "$mise_state" >"$mise_state.tmp"
+mv "$mise_state.tmp" "$mise_state"
+for target in node core:node; do
+	jq --arg target "$target" '.mappings[0].target = $target' "$resolution_map" >"$resolution_map.tmp"
+	mv "$resolution_map.tmp" "$resolution_map"
+	for command in install update; do
+		arguments=(--map "$resolution_map")
+		[ "$command" != install ] || arguments+=("$mise_brewfile")
+		: >"$mise_log"
+		if output="$(MISE_DISABLE_TOOLS=node mise_run "$command" "${arguments[@]}" 2>&1)"; then fail 'Disabled tool was treated as absent.'; fi
+		contains 'Could not inspect global mise tool' "$output"
+		not_contains 'use --global' "$(cat "$mise_log")"
+		[ "$(jq -r '.node[0].requested_version' "$mise_state")" = 20 ] || fail 'Disabled constraint was changed.'
+	done
+done
+jq '.mappings[0].target = "node"' "$resolution_map" >"$resolution_map.tmp"
+mv "$resolution_map.tmp" "$resolution_map"
+
 # Metadata retains both resolutions even when inventory deduplicates the version.
 for installed in true false; do
 	jq --argjson installed "$installed" '.node = [{installed:$installed,requested_version:"26",version:"26.7.0"},{installed:$installed,requested_version:"26.7.0",version:"26.7.0"}]' "$mise_state" >"$mise_state.tmp"

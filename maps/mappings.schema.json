@@ -42,7 +42,7 @@
           "if": { "properties": { "action": { "const": "mise" } } },
           "then": {
             "required": ["target"],
-            "properties": { "target": { "pattern": "^([A-Za-z0-9][A-Za-z0-9._:/+-]*|npm:@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$" } }
+            "properties": { "target": { "pattern": "^(?!.*\\s)([A-Za-z0-9][A-Za-z0-9._:/+-]*|npm:@[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$" } }
           }
         },
         {
